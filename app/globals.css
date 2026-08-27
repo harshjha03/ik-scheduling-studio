@@ -3,19 +3,22 @@
 /* Design tokens from the Claude Design artboard "IK Scheduler v3" */
 :root {
   --page: #f5f7fa;
-  --ink: #101a33;
-  --ink-2: #263450;
-  --ink-3: #42506b;
-  --muted: #6d7a91;
-  --muted-2: #94a1b5;
-  --muted-3: #8390a5;
+  --ink: #364357;
+  --ink-2: #364357;
+  --ink-3: #4a5871;
+  --muted: #5C6A80;
+  --muted-2: #6B7789;
+  --muted-3: #626E82;
   --line: #e2e8f1;
   --line-2: #edf1f7;
   --field: #d9e1ec;
-  --brand: #2f5fd0;
-  --brand-deep: #1f3c78;
-  --brand-tint: #e9eff8;
-  --brand-ring: #a7c0e8;
+  --brand: #2E6DA4;
+  --brand-deep: #2E6DA4;
+  --brand-tint: #EAF2FB;
+  --brand-ring: #9FC4E6;
+  --brand-soft: #F4F8FD;
+  --brand-line: #C9DEF2;
+  --brand-bright: #4F95D8;
   --red: #c0392b;
   --red-tint: #fbebe8;
   --red-line: #f0c7c0;
@@ -51,16 +54,16 @@ button {
 }
 button:not(:disabled):active { transform: scale(.972); }
 button:focus-visible, select:focus-visible, input:focus-visible {
-  outline: 3px solid rgba(47,95,208,.3);
+  outline: 3px solid rgba(79,149,216,.3);
   outline-offset: 2px;
 }
 select, input { transition: border-color .2s ease, box-shadow .24s ease; }
 select:focus, input:focus {
   outline: none;
   border-color: var(--brand-ring);
-  box-shadow: 0 0 0 4px rgba(47,95,208,.14);
+  box-shadow: 0 0 0 4px rgba(79,149,216,.14);
 }
-::selection { background: rgba(47,95,208,.18); }
+::selection { background: rgba(79,149,216,.18); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -78,6 +81,11 @@ select:focus, input:focus {
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 24px) scale(.94); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
 @keyframes pulseRing { 0%, 100% { box-shadow: 0 1px 2px rgba(192,57,43,.16); } 50% { box-shadow: 0 0 0 5px rgba(192,57,43,.12); } }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@media (min-height: 640px) {
+  .cal-sme { display: block; }
+  .cal-chip { display: inline-block; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -113,9 +121,19 @@ select:focus, input:focus {
   .chip-info { background: var(--brand-tint); color: var(--brand-deep); border-color: #cfe0f6; }
 
   .tab { border: none; border-radius: 10px; padding: 6px 13px; font-size: 12px; cursor: pointer; }
-  .tab-on { background: #fff; box-shadow: 0 1px 3px rgba(16,26,51,0.12); font-weight: 700; color: var(--ink); }
+  .tab-on { background: var(--brand-tint); box-shadow: 0 1px 3px rgba(54,67,87,0.14); font-weight: 700; color: var(--brand-deep); }
   .tab-off { background: transparent; font-weight: 550; color: var(--muted); }
   .tabs { display: flex; background: #f1f5fa; border-radius: 12px; padding: 3px; gap: 3px; }
+  .tabs-solid { background: #e7ecf4; }
+
+  /* a soft-blue action: the design's second-tier button next to the dark primary */
+  .btn-soft { border: 1px solid var(--brand-line); background: var(--brand-soft); color: var(--ink-2); font-weight: 650; }
+  .btn-soft:hover:not(:disabled) { background: var(--brand-tint); border-color: var(--brand-ring); }
+
+  /* calendar cards drop their third line, then their chip, as the pane gets shorter */
+  .cal-sme, .cal-chip { display: none; }
+  .cal-card { text-align: left; display: flex; flex-direction: column; justify-content: center; overflow: hidden; cursor: pointer; }
+  .cal-card:hover { transform: translateY(-1.5px); box-shadow: 0 8px 20px rgba(16,26,51,0.13); }
 
   .btn { border-radius: 11px; padding: 9px 15px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--field); background: #fff; color: var(--ink-2); }
   .btn:hover:not(:disabled) { background: #f1f5fa; }
@@ -124,7 +142,9 @@ select:focus, input:focus {
   .btn-primary:hover:not(:disabled) { background: #1d2745; }
   .btn-go { border: none; background: var(--green); color: #fff; font-weight: 700; }
   .btn-go:hover:not(:disabled) { background: #0b6343; }
-  .btn-brand { border: none; background: var(--brand); color: #fff; font-weight: 700; box-shadow: 0 4px 12px rgba(47,95,208,0.26); }
+  .btn-brand { border: none; background: var(--brand); color: #fff; font-weight: 700; box-shadow: 0 4px 12px rgba(79,149,216,0.26); }
+  .btn-brand:hover:not(:disabled) { background: #245B87; }
+  .btn-quiet { border: none; background: none; padding: 0; font-size: 11.5px; font-weight: 650; color: var(--brand-deep); cursor: pointer; }
   .btn-sm { padding: 6px 13px; font-size: 11.5px; border-radius: 10px; }
 
   .field { border-radius: 11px; border: 1px solid var(--field); background: #fff; padding: 9px 10px; font-size: 12.5px; color: var(--ink); }

@@ -1,7 +1,7 @@
 /** Pure view helpers shared by the dashboard components. No React, no fetching. */
 import type {
-  AvailabilityWindow, Batch, Candidate, Category, Course, DraftRow, Flag, FlagCode, HistoryRecord, Session, SME,
-  Severity, WorkItem,
+  AvailabilityWindow, Batch, Candidate, Category, Course, DraftRow, Fix, Flag, FlagCode, HistoryRecord, LeafId,
+  PublishLeaf, Session, SME, Severity, WorkItem,
 } from "./types";
 
 export const IST = "Asia/Kolkata";
@@ -174,10 +174,12 @@ export function sheetCandidates(row: DraftRow, smes: SME[]): SheetCandidate[] {
 
 export function workItems(rows: DraftRow[], smes: SME[], dismissed: Set<string>, leave: Record<string, string>): WorkItem[] {
   const out: WorkItem[] = [];
+  const whenOf = (r: DraftRow) => { const p = istParts(r.start_utc); return `${DAY_ORDER[p.day]} ${p.label}`; };
   const add = (r: DraftRow, code: FlagCode, severity: Severity, title: string) => {
     const flag = r.flags.find((f) => f.code === code);
     if (!flag || dismissed.has(`${r.session_id}:${code}`)) return;
-    out.push({ key: `${r.session_id}:${code}`, code, severity, title, detail: flag.reason, session_id: r.session_id });
+    out.push({ key: `${r.session_id}:${code}`, code, severity, title, detail: flag.reason,
+      session_id: r.session_id, blocking: severity === "critical", when: whenOf(r) });
   };
   rows.forEach((r) => add(r, "UNFILLED", "critical", `${r.batch_id} · ${r.sub_specialty ?? r.type} has no teacher`));
   rows.forEach((r) => add(r, "HARD_CONFLICT", "critical", `${r.batch_id} · double booking`));
@@ -188,15 +190,132 @@ export function workItems(rows: DraftRow[], smes: SME[], dismissed: Set<string>,
     if (!s || dismissed.has(`leave:${smeId}`)) return;
     const clash = rows.filter((r) => r.sme_id === smeId);
     out.push({
-      key: `leave:${smeId}`, code: "LEAVE", severity: "medium", sme_id: smeId,
+      key: `leave:${smeId}`, code: "LEAVE", severity: "medium", sme_id: smeId, blocking: false, when: "this week",
       title: `${s.name} is on leave next week`,
       detail: `${text}. ${clash.length
-        ? `${clash.length} class(es) are still assigned to them — re-run the draft without them.`
+        ? `${clash.length} class(es) are still assigned to them — reassign or move.`
         : "No classes are assigned to them, nothing to do."}`,
       session_id: clash[0]?.session_id ?? null,
     });
   });
   return out;
+}
+
+// ---- ops assist: propose a fix, never apply one silently ----
+
+/**
+ * The best stand-in for a row, chosen only from `candidates` — the list the engine already
+ * rule-checked — so an assist proposal can never break a hard rule. Prefers the lightest week,
+ * then the better match, and skips anyone the fairness band would push out.
+ */
+export function bestCandidate(
+  row: DraftRow, rows: DraftRow[], smes: SME[], opts: { exclude?: string | null; allowFairnessBreach?: boolean } = {},
+): Candidate | null {
+  const count = (id: string) => rows.filter((r) => r.sme_id === id).length;
+  const byId = new Map(smes.map((s) => [s.id, s]));
+  return row.candidates
+    .filter((c) => c.sme_id !== row.sme_id && c.sme_id !== opts.exclude)
+    .filter((c) => opts.allowFairnessBreach || !c.breaches_fairness)
+    .filter((c) => { const s = byId.get(c.sme_id); return !!s && count(c.sme_id) < s.preferred; })
+    .sort((a, b) => count(a.sme_id) - count(b.sme_id) || b.score - a.score)[0] ?? null;
+}
+
+export function autoFix(item: WorkItem, rows: DraftRow[], smes: SME[]): Fix | null {
+  const row = rows.find((r) => r.session_id === item.session_id) ?? null;
+  const byId = new Map(smes.map((s) => [s.id, s]));
+  if (!row) {
+    return item.code === "LEAVE"
+      ? { label: "Dismiss — nothing to do", why: "No classes are assigned in that window, so there is nothing to move.",
+          chips: [["No classes in that window", "good"]], action: { kind: "dismiss", key: item.key } }
+      : null;
+  }
+  const pick = bestCandidate(row, rows, smes, {
+    exclude: item.code === "HARD_CONFLICT" || item.code === "LEAVE" ? row.sme_id : null,
+  });
+  if (pick) {
+    const s = byId.get(pick.sme_id)!;
+    const mine = rows.filter((r) => r.sme_id === pick.sme_id).length;
+    const p = istParts(row.start_utc);
+    return {
+      label: `Assign ${pick.name}`,
+      who: { id: pick.sme_id, name: pick.name },
+      why: `${pick.name} carries ${row.sub_specialty ?? row.type}, is free at that hour and stays inside the fairness band.`,
+      chips: [
+        [`Free ${DAY_ORDER[p.day]} ${p.label}`, "good"],
+        [`${mine} of ${s.preferred} this week`, mine < s.preferred ? "good" : "warn"],
+        [`★ ${s.rating.toFixed(1)} · ${s.level}`, "neutral"],
+        [`Match ${pick.score.toFixed(2)}`, "neutral"],
+      ],
+      action: { kind: "assign", sessionId: row.session_id, smeId: pick.sme_id, smeName: pick.name },
+    };
+  }
+  if (item.code === "FAIRNESS_VIOLATION") {
+    return { label: "Accept for this week", why: "Nobody inside the fairness band carries this topic at that hour — the band evens out over the next run.",
+      chips: [["No in-band teacher free", "warn"], ["Evens out next run", "neutral"]],
+      action: { kind: "accept", sessionId: row.session_id, code: "FAIRNESS_VIOLATION" } };
+  }
+  if (item.code === "HARD_CONFLICT") {
+    return { label: "Accept the clash this week", why: "Nobody else carries this topic at that hour. Accepting keeps the teacher on both and logs it for the next run.",
+      chips: [["Nobody else free", "warn"], ["Logged as an override", "neutral"]],
+      action: { kind: "accept", sessionId: row.session_id, code: "HARD_CONFLICT" } };
+  }
+  if (item.code === "LEAVE") {
+    return { label: "Dismiss — handled elsewhere", why: "No in-band teacher is free for these classes; move them from the calendar or accept the clash.",
+      chips: [["No in-band teacher free", "warn"]], action: { kind: "dismiss", key: item.key } };
+  }
+  return null;   // UNFILLED with no eligible teacher is a judgement call, by design
+}
+
+// ---- publish ----
+
+export const PUB_CHANNELS: PublishLeaf["channel"][] = [
+  { key: "cal", short: "Google Calendar", title: "Update Google Calendar", sub: "Creates or updates each class as an event, with topic, room link and teacher" },
+  { key: "email", short: "e-mail", title: "Update via e-mail", sub: "One digest of the published week, sent per person" },
+  { key: "sms", short: "SMS", title: "Update via SMS", sub: "Day-before reminder — topic, time and who is teaching" },
+];
+
+export function publishLeaves(rows: DraftRow[], batches: Batch[]): PublishLeaf[] {
+  const live = rows.filter((r) => r.sme_id);
+  const bs = batches.filter((b) => rows.some((r) => r.batch_id === b.id));
+  const aud: PublishLeaf["audience"][] = [
+    { key: "sme", label: "SMEs", count: `${new Set(live.map((r) => r.sme_id)).size} teaching this week` },
+    { key: "stu", label: "Students", count: `${bs.reduce((a, b) => a + b.learners, 0)} across ${bs.length} batches` },
+  ];
+  return PUB_CHANNELS.flatMap((channel) => aud.map((audience) => ({ id: `${channel.key}:${audience.key}` as LeafId, channel, audience })));
+}
+
+export function sendSummary(leaves: PublishLeaf[]): string {
+  const by = new Map<string, string[]>();
+  leaves.forEach((l) => by.set(l.channel.short, [...(by.get(l.channel.short) ?? []), l.audience.label]));
+  return [...by].map(([c, a]) => `${c} to ${a.join(" + ")}`).join(" · ");
+}
+
+// ---- SME management filters ----
+
+export type SmeFilter = "all" | "fits" | "free" | "over" | "leave";
+
+/** Open classes this SME could actually take: carries the topic, free, not already booked then. */
+export function fitsFor(sme: SME, rows: DraftRow[]): DraftRow[] {
+  const ref = rows[0]?.start_utc;
+  if (!ref) return [];
+  const busy = new Set(rows.filter((r) => r.sme_id === sme.id).map((r) => { const p = istParts(r.start_utc); return `${p.day}-${p.hour}`; }));
+  return rows.filter((r) => !r.sme_id)
+    .filter((r) => sme.subjects.includes(r.subject))
+    .filter((r) => !r.sub_specialty || sme.topics.includes(r.sub_specialty))
+    .filter((r) => sme.training_level >= r.required_training_level)
+    .filter((r) => { const p = istParts(r.start_utc); return isAvailable(sme, ref, p.day, p.hour) && !busy.has(`${p.day}-${p.hour}`); });
+}
+
+export function smeMatches(sme: SME, rows: DraftRow[], query: string, filter: SmeFilter, leave: Record<string, string>): boolean {
+  const q = query.trim().toLowerCase();
+  if (q && !(sme.name.toLowerCase().includes(q) || sme.city.toLowerCase().includes(q)
+    || sme.topics.join(" ").toLowerCase().includes(q) || sme.id.toLowerCase().includes(q))) return false;
+  const assigned = rows.filter((r) => r.sme_id === sme.id).length;
+  if (filter === "fits") return fitsFor(sme, rows).length > 0;
+  if (filter === "free") return assigned < sme.preferred && !leave[sme.id];
+  if (filter === "over") return assigned > sme.preferred;
+  if (filter === "leave") return !!leave[sme.id];
+  return true;
 }
 
 // ---- KPI numbers ----

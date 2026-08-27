@@ -17,6 +17,15 @@ export const ROLE_MODULES: Record<Role, ModuleKey[]> = {
   student: ["mysched"],
 };
 
+/** Single-path line icons, drawn at 18px with the current colour. */
+export const ICONS: Record<ModuleKey, string> = {
+  dashboard: "M4 4.8h6.4v5.4H4zM13.6 4.8H20v3.4h-6.4zM13.6 11.2H20v8h-6.4zM4 13.2h6.4v6H4z",
+  smes: "M9.2 11.4a3.3 3.3 0 100-6.6 3.3 3.3 0 000 6.6zM3.2 19.6c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16.6 11.3a2.7 2.7 0 000-5.4M17.2 14.5c2.4.5 3.9 2.3 3.9 5.1",
+  batches: "M12 3.2l8.2 4.3-8.2 4.3-8.2-4.3zM3.8 12.2l8.2 4.3 8.2-4.3M3.8 16.6l8.2 4.3 8.2-4.3",
+  myweek: "M8 3v3.2M16 3v3.2M3.4 9.6h17.2M4.4 6.2h15.2v14.4H4.4zM8 13h3v3H8z",
+  mysched: "M8 3v3.2M16 3v3.2M3.4 9.6h17.2M4.4 6.2h15.2v14.4H4.4zM8 13h3v3H8z",
+};
+
 export const PERSONA: Record<Role, { name: string; sub: string }> = {
   coordinator: { name: "Shruti Rao", sub: "Ops coordinator" },
   sme: { name: "Rahul Desai", sub: "SME · T14 · PM + DSA" },
@@ -118,9 +127,13 @@ export default function Sidebar({ role, mod, badges = {}, onRole, onMod }: Props
                 border: "none", cursor: "pointer",
               }}
             >
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">
-                {open ? label : label.split(" ").map((w) => w[0].toUpperCase()).join("").slice(0, 2)}
-              </span>
+              <svg
+                width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"
+              >
+                <path d={ICONS[m]} />
+              </svg>
+              {open && <span className="overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>}
               {!!badge && (
                 <span
                   className="ml-auto rounded-[7px] px-[7px] text-[11px] font-bold text-white"

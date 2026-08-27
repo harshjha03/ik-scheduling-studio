@@ -24,13 +24,31 @@ app/, lib/            Next.js (App Router) + Tailwind dashboard, implemented fro
 
 One page, three personas via the sidebar switcher (no auth — the persona is picked from the data):
 
-- **Ops coordinator** — *Dashboard* (KPI cards, week calendar, work items, class sheet, overrides tab),
-  *SME management* (glossary table + per-SME availability calendar with free-hour blocks and
-  "unfilled class that fits here" ghosts), *Batch management* (batch cards, course progress,
-  running topics, per-batch calendar, create a new batch → it is drafted immediately).
-- **SME** — *My teaching week*: my classes, availability blocks, leave request, preferred load,
-  and change requests from ops on the live week (accept / decline).
-- **Student** — *My schedule*: my batch's calendar and instructors.
+- **Ops coordinator** — *Dashboard* (clickable KPI cards, week calendar, work items, class sheet,
+  overrides tab), *SME management* (searchable table with capacity filters — "can fill an open
+  class", "has headroom", "over preference", "on leave" — plus a per-SME availability calendar with
+  free-hour blocks and "unfilled class that fits here" ghosts), *Batch management* (batch strip,
+  course progress, running topics, per-batch calendar, **add a class**, create a new batch).
+- **SME** — *My teaching week*: up-next card, my classes, availability blocks that really re-draft
+  the week, leave request, preferred load, and change requests from ops on the live week.
+- **Student** — *My schedule*: up-next card, my batch's calendar and instructors, read-only.
+
+The week calendar uses a **compressed hour axis** — only hours that hold something get a row (a jump
+is marked `⋯` with a dashed rule) — so a whole week fits one screen. The colour legend under the
+tabs *is* the status filter: click a swatch to hide or show that group.
+
+Three things the coordinator can do beyond editing rows:
+
+- **Ops assist** (Work items → *Review suggestions*) drafts a concrete fix per item — a named
+  teacher with why-chips (free at that hour, n of their preferred, rating, match score) — chosen
+  only from candidates the engine already rule-checked. Nothing is applied until ops approves it,
+  one at a time or all at once, and every applied fix is logged with an **Undo**. Items are split
+  into *blocking publish* and *advisory*.
+- **Publish** (*Approve week*) opens the channel sheet: Google Calendar, e-mail and SMS × SMEs and
+  students, with tri-state ticks, a staged send you can cancel mid-flight, and a summary of exactly
+  what went where. Publishing is blocked while any class has no teacher.
+- **Editing a published week un-publishes it** — the calendars people already hold are now stale,
+  so the badge clears and the toast says to re-publish.
 
 Two weeks are shown: **This week** (settled and approved — drafted deterministically with Stage C
 skipped, since a past week is not an LLM outage) and **Next week** (the live draft; the only week
@@ -156,16 +174,20 @@ Three layers, all runnable locally:
 
 ```bash
 pytest -q                # 43 engine tests: stages A–E, LLM failure paths, seed-data invariants
-npm run test:flows       # 69 persona flow checks in a real browser (both dev servers must be up)
+npm run test:flows       # 95 browser checks: the three personas + the v3 features
 npm run test:flows -- sme
+npm run test:flows -- features    # ops assist, publish, un-publish on edit, add a class
 ```
 
 `scripts/flow_test.js` drives Chrome over the DevTools Protocol with no dependencies (node's global
 `WebSocket` + an installed Chrome; set `CHROME=` for a non-default path). It walks every persona:
 the coordinator's draft → filter → class sheet → confirm-and-assign → override log → re-run → work
-items → approve → export → SME management → drop-out → batch creation; the SME's availability
-toggle, leave request and change-request approval; and the student's read-only schedule. The engine
-tests guard the rules, these guard what each persona can actually see and do.
+items → approve → export (the CSV's bytes are checked, not just the toast) → SME management →
+drop-out → batch creation; the SME's availability toggle, leave request and change-request
+approval; the student's read-only schedule; and the v3 features end to end — assist proposes a fix,
+ops approves it, undo reverts it; publishing is refused while a class is unfilled, then sends on
+every channel; editing after that un-publishes the week. The engine tests guard the rules, these
+guard what each persona can actually see and do.
 
 ## Notes and deliberate simplifications
 

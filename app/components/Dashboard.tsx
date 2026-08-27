@@ -3,7 +3,7 @@ import type { Batch, Category, Course, DraftRow, Meta, OverrideEvent, WeekKey, W
 import { CATEGORIES, category } from "@/lib/view";
 import WeekCalendar from "./WeekCalendar";
 import OverridesList from "./OverridesList";
-import { BatchMenu, StatusMenu } from "./FilterMenus";
+import { BatchMenu } from "./FilterMenus";
 
 interface Props {
   rows: DraftRow[];
@@ -20,14 +20,14 @@ interface Props {
   batchFilter: string;
   statusOff: Record<string, boolean>;
   workCount: number;
+  published: boolean;
   overrides: OverrideEvent[];
   loading: boolean;
+  vh: number;
   smeName: (id: string | null) => string;
   onTab: (t: "schedule" | "overrides") => void;
-  onWeek: (w: WeekKey) => void;
   onBatchFilter: (v: string) => void;
   onStatusToggle: (k: Category) => void;
-  onStatusAll: (allOn: boolean) => void;
   onOpenWork: () => void;
   onApproveWeek: () => void;
   onRerun: () => void;
@@ -37,101 +37,128 @@ interface Props {
 
 export default function Dashboard({
   rows, allRows, batches, courses, meta, weeks, week, weekDates, tab, approved, changed, batchFilter, statusOff,
-  workCount, overrides, loading, smeName, onTab, onWeek, onBatchFilter, onStatusToggle, onStatusAll,
+  workCount, published, overrides, loading, vh, smeName, onTab, onBatchFilter, onStatusToggle,
   onOpenWork, onApproveWeek, onRerun, onOpen, onOpenOverride,
 }: Props) {
   const locked = weeks[week].locked;
   const unfilled = allRows.filter((r) => !r.sme_id).length;
-  const allApproved = allRows.length > 0 && allRows.every((r) => approved.has(r.session_id));
   const counts = CATEGORIES.reduce((acc, c) => {
     acc[c.key] = rows.filter((r) => category(r, approved.has(r.session_id)) === c.key).length;
     return acc;
   }, {} as Record<Category, number>);
   const shown = rows.filter((r) => !statusOff[category(r, approved.has(r.session_id))]);
+  const tight = vh < 680;
 
   return (
-    <section className="card">
-      <div className="flex flex-wrap items-center gap-3 p-[16px_20px_14px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
+    <section className="card flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 p-[16px_20px_14px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
         <div className="tabs">
           <button onClick={() => onTab("schedule")} className={`tab ${tab === "schedule" ? "tab-on" : "tab-off"}`}>Schedule</button>
           <button onClick={() => onTab("overrides")} className={`tab ${tab === "overrides" ? "tab-on" : "tab-off"}`}>
-            Overrides {overrides.length}
+            {overrides.length ? `Overrides ${overrides.length}` : "Overrides"}
           </button>
         </div>
-        <div className="tabs">
-          {(["current", "next"] as WeekKey[]).map((k) => (
-            <button key={k} onClick={() => onWeek(k)} className={`tab ${week === k ? "tab-on" : "tab-off"}`}>
-              {weeks[k].label}
-            </button>
-          ))}
-        </div>
-        <span className="text-[12px]" style={{ color: "var(--muted)" }}>{weeks[week].range}</span>
-        {locked ? (
-          <span
-            className="rounded-[9px] px-[10px] py-[5px] text-[11.5px] font-semibold"
-            style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}
-          >
-            Live week
-          </span>
-        ) : allApproved ? (
-          <span
-            className="rounded-[9px] px-[10px] py-[5px] text-[11.5px] font-semibold"
-            style={{ background: "var(--green-tint)", color: "var(--green-ink)" }}
-          >
-            ✓ Approved
-          </span>
-        ) : null}
 
-        <div className="ml-auto flex flex-wrap items-center gap-[9px]">
-          {!locked && (
-            <>
-              <button className="btn" onClick={onRerun} disabled={loading} title="Re-run the matching pipeline with your overrides applied">
-                {loading ? "Running…" : "Re-run draft"}
-              </button>
-              <span
-                className="rounded-[9px] px-[10px] py-[5px] text-[11.5px]"
-                style={changed.size
-                  ? { background: "var(--amber-tint)", color: "var(--amber-ink)", fontWeight: 650 }
-                  : { color: "var(--muted)" }}
-              >
-                {changed.size} rows changed
-              </span>
-            </>
+        <div className="ml-auto flex flex-wrap items-center gap-[11px]">
+          {!locked && unfilled > 0 && (
+            <span className="max-w-[26ch] text-right text-[11.5px] font-semibold leading-[1.4]" style={{ color: "var(--red-ink)" }}>
+              {unfilled} class{unfilled === 1 ? "" : "es"} still without a teacher
+            </span>
           )}
-          <button className="btn btn-primary flex items-center gap-2" onClick={onOpenWork} title="Unfilled classes, conflicts and workload flags for this week">
+          {!locked && (
+            <button className="btn btn-sm" onClick={onRerun} disabled={loading} title="Re-run the matching pipeline with your overrides applied">
+              {loading ? "Running…" : "Re-run draft"}
+            </button>
+          )}
+          {!locked && (
+            <span
+              className="rounded-[9px] px-[10px] py-[5px] text-[11.5px]"
+              style={changed.size
+                ? { background: "var(--amber-tint)", color: "var(--amber-ink)", fontWeight: 650 }
+                : { color: "var(--muted)" }}
+            >
+              {changed.size} rows changed
+            </span>
+          )}
+          <button className="btn btn-soft flex items-center gap-2" onClick={onOpenWork} title="Unfilled classes, conflicts and workload flags for this week">
             <span>Work items</span>
-            <span className="rounded-[7px] px-[7px] text-[11px] font-bold text-white" style={{ background: "var(--red)" }}>{workCount}</span>
+            <span
+              className="rounded-[7px] px-[7px] text-[11px] font-bold tabular-nums"
+              style={workCount
+                ? { background: "var(--red-tint)", color: "var(--red-ink)" }
+                : { background: "#eef1f6", color: "var(--muted-3)" }}
+            >
+              {workCount}
+            </span>
           </button>
-          {!locked && !allApproved && (
+          {!locked && !published && (
             <button
               className="btn btn-go"
               onClick={onApproveWeek}
+              disabled={unfilled > 0}
               title={unfilled
-                ? `System-generated draft — ${unfilled} class(es) still have no teacher; clear them from Work items first.`
-                : `Approving publishes all ${allRows.length} classes to learner and SME calendars.`}
+                ? `${unfilled} class(es) still have no teacher — clear them from Work items first.`
+                : `Publishes all ${allRows.length} classes to learner and SME calendars.`}
             >
-              Approve all {allRows.length} classes
+              Approve week · {allRows.length}
             </button>
           )}
         </div>
       </div>
 
       {tab === "schedule" && (
-        <div className="relative flex flex-wrap items-center gap-[9px] p-[12px_20px]" style={{ borderBottom: "0.5px solid rgba(16,26,51,0.06)" }}>
+        <div className="relative flex shrink-0 flex-wrap items-center gap-[9px] p-[12px_20px]" style={{ borderBottom: "0.5px solid rgba(16,26,51,0.06)" }}>
           <BatchMenu batches={batches} courses={courses} rows={allRows} value={batchFilter} onChange={onBatchFilter} />
-          <StatusMenu counts={counts} off={statusOff} onToggle={onStatusToggle} onAll={onStatusAll} />
+        </div>
+      )}
+
+      {tab === "schedule" && (
+        <div
+          className="flex shrink-0 flex-wrap items-center gap-[7px] px-5"
+          style={tight ? { paddingTop: 7, paddingBottom: 0 } : { paddingTop: 11, paddingBottom: 3 }}
+        >
+          {!tight && (
+            <span className="label-caps mr-[3px]" style={{ letterSpacing: "0.06em" }}>Card colour</span>
+          )}
+          {CATEGORIES.map((c) => {
+            const on = !statusOff[c.key];
+            return (
+              <button
+                key={c.key}
+                onClick={() => onStatusToggle(c.key)}
+                title={`${c.label} — ${c.hint} · click to ${on ? "hide" : "show"}`}
+                className="flex items-center gap-[7px] rounded-[9px] px-[9px] py-1 text-[11.5px] font-semibold"
+                style={{
+                  border: on ? "1px solid #dde4ee" : "1px dashed #c8d2e0",
+                  background: on ? "#fff" : "#f6f8fb",
+                  color: on ? "var(--ink-3)" : "#5a6880",
+                  textDecoration: on ? "none" : "line-through",
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  className="size-[11px] shrink-0 rounded-[4px]"
+                  style={on ? { background: c.dot } : { background: "transparent", border: `1px dashed ${c.dot}` }}
+                />
+                {!tight && <span>{c.label}</span>}
+                <span className="tabular-nums" style={{ color: "var(--muted-3)" }}>{counts[c.key]}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
       {tab === "schedule" ? (
-        <div style={{ opacity: loading ? 0.55 : 1, transition: "opacity .2s ease" }}>
+        <div className="flex min-h-0 flex-1 flex-col" style={{ opacity: loading ? 0.55 : 1, transition: "opacity .2s ease" }}>
           <WeekCalendar
             rows={shown} courses={courses} meta={meta} weekDates={weekDates}
-            approved={approved} changed={changed} onOpen={onOpen}
+            approved={approved} changed={changed} onOpen={onOpen} vh={vh}
           />
         </div>
       ) : (
-        <OverridesList log={overrides} smeName={smeName} onOpen={onOpenOverride} />
+        <div className="min-h-0 flex-1 overflow-auto">
+          <OverridesList log={overrides} smeName={smeName} onOpen={onOpenOverride} />
+        </div>
       )}
     </section>
   );

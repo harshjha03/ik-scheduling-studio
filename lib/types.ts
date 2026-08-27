@@ -244,11 +244,59 @@ export interface WorkItem {
   detail: string;
   session_id: string | null;
   sme_id?: string;
+  /** critical items block publishing; the rest are advisory */
+  blocking: boolean;
+  when: string;
+}
+
+// ---- publish ----
+
+export type Audience = "sme" | "stu";
+export type ChannelKey = "cal" | "email" | "sms";
+export type LeafId = `${ChannelKey}:${Audience}`;
+export type SendState = "idle" | "ready" | "sending" | "sent";
+
+export interface PublishLeaf {
+  id: LeafId;
+  channel: { key: ChannelKey; short: string; title: string; sub: string };
+  audience: { key: Audience; label: string; count: string };
+}
+
+// ---- ops assist ----
+
+/** A concrete, reviewable proposal for one work item. Nothing is applied until ops approves it. */
+export interface Fix {
+  label: string;
+  why: string;
+  chips: [string, "good" | "warn" | "neutral"][];
+  who?: { id: string; name: string };
+  /** what the fix does — a decision the page applies, never a silent rule break */
+  action:
+    | { kind: "assign"; sessionId: string; smeId: string; smeName: string }
+    | { kind: "accept"; sessionId: string; code: FlagCode }
+    | { kind: "dismiss"; key: string };
+}
+
+export interface ResolvedEntry {
+  key: string;
+  text: string;
+  /** enough to put the row back exactly as it was */
+  undo: { kind: "row"; week: WeekKey; row: DraftRow } | { kind: "dismiss"; key: string };
+}
+
+export interface NewClass {
+  topic: string;
+  type: SessionType;
+  day: number;
+  hour: number;
+  smeId: string;
 }
 
 export type SheetState =
   | { kind: "class"; sessionId: string; week: WeekKey; stage: "info" | "pick" }
   | { kind: "ghost"; sessionId: string; week: WeekKey; smeId: string }
-  | { kind: "work" }
+  | { kind: "work"; auto?: boolean }
+  | { kind: "publish" }
+  | { kind: "newClass" }
   | { kind: "newBatch" }
   | null;

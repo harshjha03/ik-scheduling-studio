@@ -19,9 +19,9 @@ interface Props {
   approved: Set<string>;
   availOff: Record<string, boolean>;
   preferred: number;
+  vh: number;
   onAvail: (key: string) => void;
   onPreferred: (n: number) => void;
-  onWeek: (w: WeekKey) => void;
   onOpen: (sessionId: string) => void;
   leave: string | null;
   onToggleLeave: () => void;
@@ -40,8 +40,8 @@ function Stat({ label, value, sub, size = 30 }: { label: string; value: React.Re
 }
 
 export default function MyWeek({
-  role, me, myBatch, rows, smes, courses, meta, weeks, week, weekDates, approved, availOff, preferred,
-  onAvail, onPreferred, onWeek, onOpen, leave, onToggleLeave, pending, onResolve,
+  role, me, myBatch, rows, smes, courses, meta, weeks, week, weekDates, approved, availOff, preferred, vh,
+  onAvail, onPreferred, onOpen, leave, onToggleLeave, pending, onResolve,
 }: Props) {
   const isStudent = role === "student";
   const mine = isStudent ? rows.filter((r) => r.batch_id === myBatch?.id) : rows.filter((r) => r.sme_id === me.id);
@@ -62,9 +62,31 @@ export default function MyWeek({
     byInstructor.get(r.sme_id!)!.push(r);
   });
 
+  const up = next ? istParts(next.start_utc) : null;
+
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="grid gap-[14px]" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(196px,1fr))" }}>
+    <div className="flex min-h-0 flex-1 flex-col gap-[14px]">
+      {next && up && (
+        <div className="card flex shrink-0 items-center gap-[14px] rounded-[18px] p-[13px_18px]">
+          <span className="flex size-[46px] shrink-0 flex-col items-center justify-center rounded-[14px]" style={{ background: "var(--brand-tint)" }}>
+            <span className="text-[9.5px] font-bold" style={{ color: "var(--brand-deep)", letterSpacing: "0.04em" }}>{meta.days[up.day]}</span>
+            <span className="text-[13px] font-bold leading-[1.1]" style={{ color: "var(--brand-deep)" }}>{up.label}</span>
+          </span>
+          <span className="min-w-0">
+            <span className="label-caps block">Up next</span>
+            <span className="mt-[2px] block overflow-hidden text-ellipsis whitespace-nowrap text-[14.5px] font-bold" style={{ letterSpacing: "-0.01em" }}>
+              {next.sub_specialty ?? meta.type_label[next.type]}
+            </span>
+            <span className="mt-[2px] block text-[11.5px]" style={{ color: "var(--muted)" }}>
+              {isStudent
+                ? `${next.batch_id} · ${next.sme_name ?? "teacher to be confirmed"}`
+                : `${next.batch_id} · ${meta.type_label[next.type]} · ${weeks[week].label.toLowerCase()}`}
+            </span>
+          </span>
+          <button className="btn btn-brand ml-auto shrink-0" onClick={() => onOpen(next.session_id)}>Open class</button>
+        </div>
+      )}
+      <div className="grid shrink-0 gap-[14px]" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(196px,1fr))" }}>
         {isStudent ? (
           <>
             <Stat label="Classes this week" value={mine.length} sub={`${mine.filter((r) => r.type === "mock").length} mock interview(s) included`} />
@@ -119,22 +141,15 @@ export default function MyWeek({
         </section>
       )}
 
-      <section className="card">
-        <div className="flex flex-wrap items-center gap-3 p-[15px_20px_13px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
+      <section className="card flex min-h-0 flex-1 flex-col">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 p-[15px_20px_13px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
           <div className="text-[13px] font-bold">
             {isStudent ? `${myBatch?.id} · ${weeks[week].label}` : `My classes · ${weeks[week].label}`}
-          </div>
-          <div className="tabs ml-auto">
-            {(["current", "next"] as WeekKey[]).map((k) => (
-              <button key={k} onClick={() => onWeek(k)} className={`tab ${week === k ? "tab-on" : "tab-off"}`}>
-                {weeks[k].label}
-              </button>
-            ))}
           </div>
         </div>
         <WeekCalendar
           rows={mine} courses={courses} meta={meta} weekDates={weekDates} approved={approved}
-          onOpen={onOpen} freeCells={isStudent ? undefined : freeCells}
+          onOpen={onOpen} freeCells={isStudent ? undefined : freeCells} vh={vh}
         />
       </section>
 

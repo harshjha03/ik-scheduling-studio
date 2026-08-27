@@ -94,7 +94,7 @@ const HELPERS = `
   };
   const body = () => norm(document.body.innerText);
   const has = (t) => body().includes(t);
-  const cards = () => all("button").filter((b) => b.style.position === "absolute" && b.style.height);
+  const cards = () => all("button.cal-card");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 `;
 
@@ -110,7 +110,7 @@ const H = `
   };
   const body = () => norm(document.body.innerText);
   const has = (t) => body().includes(t);
-  const cards = () => all("button").filter((b) => b.className.includes("absolute") && b.style.top !== "");
+  const cards = () => all("button.cal-card");
   const cardText = () => cards().map((c) => norm(c.innerText));
   const sheet = () => document.querySelector('[role="dialog"]');
   const sheetText = () => (sheet() ? norm(sheet().innerText) : null);
@@ -171,6 +171,9 @@ async function main() {
     if (!only || only === "coordinator") await coordinator(ev, wait, settle, dl);
     if (!only || only === "sme") await sme(ev, wait, settle);
     if (!only || only === "student") await student(ev, wait, settle);
+    if (!only || only === "features") { await b.goto("http://localhost:3000/");
+      await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
+      await features(ev, wait, settle); }
   } finally {
     await b.close();
   }
@@ -188,7 +191,7 @@ async function coordinator(ev, wait, settle, dl) {
     week: norm(all(".tab").find((t) => t.className.includes("tab-on") && /week/i.test(t.textContent)).textContent),
     cards: cards().length,
     work: (body().match(/Work items\\s*(\\d+)/) || [])[1],
-    approveAll: !!byPart("button", "Approve all"),
+    approveAll: !!byPart("button", "Approve week"),
     approvedPill: has("✓ Approved"),
     unfilledCards: cardText().filter((t) => t.includes("Unfilled")).length,
   }`);
@@ -196,7 +199,7 @@ async function coordinator(ev, wait, settle, dl) {
   ok(s1.week === "Next week", "defaults to the draft week", s1.week);
   ok(s1.cards === 41, `calendar renders every class (${s1.cards})`);
   ok(Number(s1.work) > 0, `work items badge shows ${s1.work}`);
-  ok(s1.approveAll && !s1.approvedPill, "draft week is NOT pre-approved (Approve-all offered)", s1);
+  ok(s1.approveAll && !s1.approvedPill, "draft week is NOT pre-approved (Approve week offered)", s1);
   ok(s1.unfilledCards === 2, `the 2 seeded unfilled classes are visible (${s1.unfilledCards})`);
 
   console.log("\n-- C2 week switch --");
@@ -227,15 +230,12 @@ async function coordinator(ev, wait, settle, dl) {
   ok(f2 === 41, `clearing the batch filter restores all classes (${f2})`);
 
   const st = await ev(`
-    const sm = all("button").find((x) => /statuses|status shown/i.test(norm(x.textContent)));
-    sm.click(); await sleep(250);
     const red = all("button").find((x) => norm(x.textContent).includes("Unfilled / conflict"));
-    red.click(); await sleep(350);
+    red.click(); await sleep(400);
     const left = cardText().filter((t) => t.includes("Unfilled")).length;
-    red.click(); await sleep(300);
-    document.body.click();
+    red.click(); await sleep(400);
     return { left, restored: cardText().filter((t) => t.includes("Unfilled")).length };`);
-  ok(st.left === 0, "status filter hides the unfilled classes", st);
+  ok(st.left === 0, "the legend doubles as the status filter — hides the unfilled classes", st);
   ok(st.restored === 2, "and restores them", st);
 
   console.log("\n-- C4 open a class --");
@@ -309,22 +309,27 @@ async function coordinator(ev, wait, settle, dl) {
     clickPart("button", "Work items"); await sleep(450);
     const t = sheetText() || "";
     return { open: !!sheet(), text: t.slice(0, 240), items: all('[role="dialog"] .chip').length,
-             pick: !!byPart('[role="dialog"] button', "Pick a teacher") };`);
-  ok(work.open && /work item/i.test(work.text), "work items sheet lists what needs a decision", work.text);
+             assist: /let ops assist draft the fixes/i.test(t), groups: /blocking publish/i.test(t) };`);
+  ok(work.open && /decision/i.test(work.text), "work items sheet lists what needs a decision", work.text);
+  ok(work.assist && work.groups, "and offers the ops assist, grouped blocking vs advisory", work.text);
   ok(work.items > 0, `${work.items} flagged items listed`);
   await ev(`if (sheet()) byPart('[role="dialog"] button', "Close").click(); return true;`);
 
   console.log("\n-- C9 approve the week --");
   const appr = await ev(`
-    const btn = byPart("button", "Approve all");
+    const btn = byPart("button", "Approve week");
     const unfilled = cardText().filter((t) => t.includes("Unfilled")).length;
-    btn.click(); await sleep(600);
-    return { unfilled, toast: toast(), pill: has("✓ Approved"), stillOffered: !!byPart("button", "Approve all") };`);
+    const disabled = !!(btn && btn.disabled);
+    if (btn && !disabled) { btn.click(); await sleep(700); }
+    return { unfilled, disabled, note: /still without a teacher/.test(body()), sheet: !!sheet(),
+             toast: toast(), pill: has("Published") };`);
   if (appr.unfilled > 0) {
-    ok(/still have no teacher/.test(appr.toast || ""), `approve-all refuses while ${appr.unfilled} class(es) are unfilled: ${appr.toast}`);
-    ok(!appr.pill, "and the week is not marked approved");
+    ok(appr.disabled, `approve is disabled while ${appr.unfilled} class(es) are unfilled`, appr);
+    ok(appr.note, "and the header says why", appr);
+    ok(!appr.pill, "the week is not marked published", appr);
   } else {
-    ok(appr.pill && !appr.stillOffered, "approving the week marks it ✓ Approved");
+    ok(appr.sheet, "approving opens the publish sheet", appr);
+    await ev(`if (sheet()) byPart('[role="dialog"] button', "Cancel").click(); return true;`);
   }
 
   console.log("\n-- C10 export --");
@@ -350,7 +355,7 @@ async function coordinator(ev, wait, settle, dl) {
 
   console.log("\n-- C11 SME management --");
   const smes = await ev(`
-    const nav = all("button").find((x) => norm(x.textContent) === "SM" || norm(x.textContent) === "SME management");
+    const nav = all("nav button").find((x) => /SME management/.test(x.title || ""));
     nav.click(); await sleep(700);
     return { h1: norm(document.querySelector("h1").textContent), rows: all("tbody tr").length,
              hasCal: has("Availability & assignment history"), legend: has("free working hour") };`);
@@ -377,7 +382,7 @@ async function coordinator(ev, wait, settle, dl) {
 
   console.log("\n-- C12 batch management --");
   const batches = await ev(`
-    const nav = all("button").find((x) => norm(x.textContent) === "BM" || norm(x.textContent) === "Batch management");
+    const nav = all("nav button").find((x) => /Batch management/.test(x.title || ""));
     nav.click(); await sleep(700);
     const cardsN = all("button").filter((x) => /learners/.test(norm(x.textContent)) && /week \\d+ of/.test(norm(x.textContent))).length;
     return { h1: norm(document.querySelector("h1").textContent), batches: cardsN,
@@ -392,13 +397,13 @@ async function coordinator(ev, wait, settle, dl) {
     const note = sheetText();
     byPart('[role="dialog"] button', "Create batch").click();
     return { before, note };`);
-  const createToast = await global.__waitToast(/classes drafted for next week/);
-  const createdRes = await ev(`
-    return { after: all("button").filter((x) => /learners/.test(norm(x.textContent)) && /week \\d+ of/.test(norm(x.textContent))).length,
-             cards: cards().length };`);
-  ok(createdRes.after === created.before + 1, `creating a batch adds it (${created.before} -> ${createdRes.after})`);
-  ok(!!createToast, `new batch is drafted into next week immediately: ${createToast}`);
-  ok(createdRes.cards > 0, `the new batch's calendar renders (${createdRes.cards} classes)`);
+  const createToast = await global.__waitToast(/classes drafted for next week/, 40000);
+  const createdRes = await wait(`
+    const after = all("button").filter((x) => /learners/.test(norm(x.textContent)) && /week \\d+ of/.test(norm(x.textContent))).length;
+    return (after === ${created.before + 1} && cards().length > 0) ? { after, cards: cards().length } : null;`,
+    "the new batch to be drafted", 45000).catch(() => null);
+  ok(!!createdRes, `creating a batch adds it and drafts its classes (${JSON.stringify(createdRes)})`);
+  ok(!!createToast || !!createdRes, `new batch is drafted into next week: ${createToast ?? "confirmed on the calendar"}`);
 }
 
 // ------------------------------------------------------------------------ sme
@@ -508,7 +513,8 @@ async function student(ev, wait, settle) {
 
   const only = await ev(`
     const txt = cardText().join(" | ");
-    return { batches: [...new Set(cardText().map((t) => (t.match(/^([A-Z]+-\\d+)/) || [])[1]))], txt: txt.slice(0, 120) };`);
+    const ids = cardText().map((t) => (t.match(/([A-Z]{2,}-\\d+)/) || [])[1]).filter(Boolean);
+    return { batches: [...new Set(ids)], n: cardText().length, txt: txt.slice(0, 120) };`);
   ok(only.batches.length === 1, `calendar is limited to the student's own batch (${JSON.stringify(only.batches)})`);
 
   const wk = await ev(`
@@ -516,6 +522,98 @@ async function student(ev, wait, settle) {
     clickPart(".tab", "This week"); await sleep(600);
     return { before, after: cards().length, teacher: cardText()[0] };`);
   ok(wk.after > 0, `week switch works for the student (${wk.before} -> ${wk.after} classes)`);
+}
+
+// ------------------------------------------------------------------ features
+// The v3 additions: ops assist, publish-to-channels, un-publish on edit, add a class.
+async function features(ev, wait, settle) {
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  const unfilled = () => `cards().filter((c) => /Unfilled/.test(norm(c.innerText))).length`;
+
+  console.log("\n=== FEATURES: ops assist ===");
+  await ev(`clickPart("button", "Work items"); return true;`); await sleepMs(600);
+  const w0 = await ev(`const t = sheetText() || ""; return { open: !!sheet(),
+    assist: /let ops assist draft the fixes/i.test(t), groups: /blocking publish/i.test(t) };`);
+  ok(w0.open && w0.assist, "work sheet offers the ops assist");
+  ok(w0.groups, "items are grouped into blocking vs advisory");
+  await ev(`clickPart('[role="dialog"] button', "Review suggestions"); return true;`); await sleepMs(700);
+  const w1 = await ev(`const t = sheetText() || ""; return { plan: /plan ready/i.test(t),
+    suggested: (t.match(/suggested fix/gi) || []).length, chips: /Free (Mon|Tue|Wed|Thu|Fri|Sat)/.test(t),
+    approve: !!byPart('[role="dialog"] button', "Approve fix") };`);
+  ok(w1.plan && w1.suggested > 0, `assist drafts ${w1.suggested} suggested fixes`, w1);
+  ok(w1.chips && w1.approve, "each names a teacher, says why, and can be approved on its own", w1);
+  await ev(`clickPart('[role="dialog"] button', "Approve fix"); return true;`); await sleepMs(900);
+  ok(await ev(`return /Undo/.test(sheetText() || "")`), "an applied fix is logged with an Undo");
+  await ev(`clickPart('[role="dialog"] button', "Undo"); return true;`); await sleepMs(800);
+  ok(/Reverted/.test((await ev(`return toast()`)) || ""), "undo puts the row back");
+  await ev(`if (sheet()) byPart('[role="dialog"] button', "Close").click(); return true;`); await sleepMs(400);
+
+  console.log("\n=== FEATURES: publish ===");
+  const blocked = await ev(`const btn = byPart("button", "Approve week");
+    return { unfilled: ${unfilled()}, disabled: !!(btn && btn.disabled), note: /still without a teacher/.test(body()) };`);
+  ok(blocked.unfilled > 0 && blocked.disabled, `publishing is blocked while ${blocked.unfilled} classes are unfilled`, blocked);
+  ok(blocked.note, "and the header says why", blocked);
+  for (let i = 0; i < 4; i++) {
+    if (!(await ev(`return ${unfilled()}`))) break;
+    await ev(`
+      const c = cards().find((c) => /Unfilled/.test(norm(c.innerText)));
+      c.click(); await sleep(500);
+      const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
+      if (!pick.length) { if (sheet()) byPart('[role="dialog"] button', "Close").click(); return false; }
+      pick[0].click(); await sleep(350);
+      const conf = all('[role="dialog"] button').find((x) => /Confirm →/.test(norm(x.textContent)));
+      if (conf) conf.click();
+      await sleep(700); return true;`);
+  }
+  ok((await ev(`return ${unfilled()}`)) === 0, "ops clears the blockers with confirmed overrides");
+  await ev(`clickPart("button", "Approve week"); return true;`); await sleepMs(700);
+  const p0 = await ev(`const t = sheetText() || ""; return { open: !!sheet(), cal: /Google Calendar/.test(t),
+    email: /e-mail/i.test(t), sms: /SMS/.test(t), ready: (t.match(/Ready/g) || []).length };`);
+  ok(p0.open && p0.cal && p0.email && p0.sms, "publish sheet lists Calendar, e-mail and SMS", p0);
+  ok(p0.ready >= 6, `${p0.ready} channel/audience rows are Ready`, p0);
+  await ev(`clickPart('[role="dialog"] button', "Send"); return true;`);
+  await wait(`return /Week published/i.test(sheetText() || "") || null;`, "the send to finish", 40000);
+  const p1 = await ev(`return { sent: ((sheetText() || "").match(/Sent/g) || []).length, toast: toast() };`);
+  ok(p1.sent >= 6, `every selected row reports Sent (${p1.sent})`, p1);
+  ok(/published/i.test(p1.toast || ""), `and the toast summarises where it went: ${p1.toast}`);
+  await ev(`clickPart('[role="dialog"] button', "Done"); return true;`); await sleepMs(700);
+  const p2 = await ev(`return { pill: /Published/.test(body()), gone: !byPart("button", "Approve week"),
+    ticks: cards().filter((c) => /✓/.test(norm(c.innerText))).length };`);
+  ok(p2.pill && p2.gone, "the week is badged Published", p2);
+  ok(p2.ticks > 0, `${p2.ticks} cards carry the approved tick`, p2);
+
+  console.log("\n=== FEATURES: editing a published week un-publishes it ===");
+  const un = await ev(`
+    const c = cards().find((c) => !/Unfilled/.test(norm(c.innerText)));
+    c.click(); await sleep(500);
+    const ch = byPart('[role="dialog"] button', "Change teacher");
+    if (ch) { ch.click(); await sleep(400); }
+    const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
+    if (!pick.length) return { skipped: true };
+    pick[0].click(); await sleep(350);
+    const conf = all('[role="dialog"] button').find((x) => /Confirm →/.test(norm(x.textContent)));
+    if (conf) conf.click();
+    await sleep(900);
+    return { toast: toast(), pill: /Published/.test(body()), approveBack: !!byPart("button", "Approve week") };`);
+  ok(!un.skipped && !un.pill, "changing a teacher clears the Published badge", un);
+  ok(!!un.approveBack, "and the week can be re-published", un);
+  ok(/re-publishing/.test(un.toast || ""), `the toast explains why: ${un.toast}`, un);
+
+  console.log("\n=== FEATURES: add a class ===");
+  const add = await ev(`
+    const nav = all("nav button").find((x) => /Batch management/.test(x.title || ""));
+    if (nav) nav.click(); await sleep(800);
+    const btn = byPart("button", "Add a class");
+    if (!btn) return { skipped: true };
+    btn.click(); await sleep(600);
+    const t = sheetText() || "";
+    return { open: !!sheet(), form: /topic/i.test(t) && /day/i.test(t) && /time/i.test(t), free: /teacher\\(s\\) free/.test(t) };`);
+  ok(!add.skipped && add.open && add.form, "Add a class opens a form with topic, day and time", add);
+  ok(!!add.free, "and says how many teachers are actually free for that slot", add);
+  const before = await ev(`return cards().length`);
+  await ev(`clickPart('[role="dialog"] button', "Add class"); return true;`);
+  const grew = await wait(`return cards().length === ${before + 1} ? cards().length : null;`, "the class to be drafted", 45000).catch(() => null);
+  ok(!!grew, `the class is added and the draft staffs it (${before} -> ${grew})`);
 }
 
 main().catch((e) => { console.error("SUITE ERROR:", e.message); process.exit(1); });

@@ -13,10 +13,11 @@ interface Props {
   weekDates: { day: string; date: string }[];
   approved: Set<string>;
   selected: string;
+  vh: number;
   onSelect: (id: string) => void;
-  onWeek: (w: WeekKey) => void;
   onOpen: (sessionId: string) => void;
   onNewBatch: () => void;
+  onNewClass: () => void;
 }
 
 const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
@@ -26,7 +27,8 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 };
 
 export default function BatchManagement({
-  batches, rows, courses, meta, weeks, week, weekDates, approved, selected, onSelect, onWeek, onOpen, onNewBatch,
+  batches, rows, courses, meta, weeks, week, weekDates, approved, selected, vh,
+  onSelect, onOpen, onNewBatch, onNewClass,
 }: Props) {
   const bt = batches.find((b) => b.id === selected) ?? batches[0];
   const btRows = rows.filter((r) => r.batch_id === bt.id);
@@ -34,20 +36,13 @@ export default function BatchManagement({
   const topics = [...new Map(btRows.filter((r) => r.sub_specialty).map((r) => [r.sub_specialty!, r])).values()].slice(0, 4);
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-wrap items-center gap-[10px]">
-        <div className="tabs">
-          {(["current", "next"] as WeekKey[]).map((k) => (
-            <button key={k} onClick={() => onWeek(k)} className={`tab ${week === k ? "tab-on" : "tab-off"}`}>
-              {weeks[k].label}
-            </button>
-          ))}
-        </div>
-        <span className="text-[12px]" style={{ color: "var(--muted)" }}>{weeks[week].range}</span>
+    <div className="flex min-h-0 flex-1 flex-col gap-[14px]">
+      <div className="flex shrink-0 flex-wrap items-center gap-[10px]">
+        <span className="text-[12px]" style={{ color: "var(--muted)" }}>{batches.length} batches · {weeks[week].range}</span>
         <button className="btn btn-brand ml-auto" onClick={onNewBatch}>+ Create new batch</button>
       </div>
 
-      <div className="grid gap-[14px]" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(268px,1fr))" }}>
+      <div className="flex shrink-0 gap-3 overflow-x-auto overflow-y-hidden p-[2px_2px_8px]">
         {batches.map((b) => {
           const bRows = rows.filter((r) => r.batch_id === b.id);
           const unf = bRows.filter((r) => !r.sme_id).length;
@@ -58,7 +53,7 @@ export default function BatchManagement({
             <button
               key={b.id}
               onClick={() => onSelect(b.id)}
-              className="block w-full rounded-[18px] p-[16px_17px] text-left"
+              className="block w-[248px] shrink-0 rounded-[18px] p-[16px_17px] text-left transition hover:-translate-y-[2px]"
               style={{
                 border: `1px solid ${on ? c?.accent : "var(--line)"}`, background: on ? c?.tint : "#fff",
                 cursor: "pointer", boxShadow: "0 1px 2px rgba(16,26,51,0.03)",
@@ -94,7 +89,7 @@ export default function BatchManagement({
         })}
       </div>
 
-      <section className="card">
+      <section className="card flex min-h-0 flex-1 flex-col">
         <div className="flex flex-wrap items-start gap-4 p-[18px_20px_14px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
           <div>
             <div className="flex items-center gap-[9px]">
@@ -109,6 +104,13 @@ export default function BatchManagement({
             <div className="mt-[3px] text-[12.5px]" style={{ color: "var(--muted)" }}>
               {course?.name} · {bt.learners} learners · {bt.per_week} classes a week · started {bt.started}
             </div>
+            <button
+              className="btn btn-soft mt-[11px] inline-flex items-center gap-[7px]"
+              onClick={onNewClass}
+              title="Add a class to this batch and pick a teacher who is free"
+            >
+              <span className="text-[14px] leading-none">+</span><span>Add a class</span>
+            </button>
           </div>
           <div className="ml-auto grid min-w-[340px] flex-1 gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(132px,1fr))" }}>
             <div className="rounded-[14px] p-[11px_13px]" style={{ background: "#f1f5fa" }}>
@@ -152,7 +154,7 @@ export default function BatchManagement({
           </div>
         </div>
 
-        <WeekCalendar rows={btRows} courses={courses} meta={meta} weekDates={weekDates} approved={approved} onOpen={onOpen} />
+        <WeekCalendar rows={btRows} courses={courses} meta={meta} weekDates={weekDates} approved={approved} onOpen={onOpen} vh={vh} />
       </section>
     </div>
   );
