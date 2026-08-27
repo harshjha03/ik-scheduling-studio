@@ -310,6 +310,7 @@ export type SheetState =
   | { kind: "import" }
   | { kind: "smeImport" }
   | { kind: "profile" }
+  | { kind: "studentEmail" }
   | null;
 
 /** The editable half of an SME record — contact details and the weekly preference. Skills, level

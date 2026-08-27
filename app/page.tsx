@@ -81,6 +81,9 @@ export default function Page() {
   const [imp, setImp] = useState<ImportResult<ImportedClass>>(emptyImport);
   const [smeImp, setSmeImp] = useState<ImportResult<ImportedSme>>(emptyImport);
   const [prof, setProf] = useState<Profile | null>(null);
+  // ponytail: students are a persona, not a roster — one e-mail in state; move onto a learner record when one exists
+  const [studentEmail, setStudentEmail] = useState("aarav.shah@example.com");
+  const [emailDraft, setEmailDraft] = useState("");
   const [selSme, setSelSme] = useState("T01");
   const [selBatch, setSelBatch] = useState("DSA-01");
   const [batchFilter, setBatchFilter] = useState("all");
@@ -810,6 +813,31 @@ export default function Page() {
       );
     }
 
+    if (sheet.kind === "studentEmail") {
+      const ok = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(emailDraft.trim());
+      const close = () => setSheet(null);
+      return (
+        <Sheet
+          width={460} eyebrow="My profile" title="Edit my e-mail"
+          subtitle="Schedule updates and calendar invites for your batch are sent here."
+          footerNote={ok ? "Applies to future sends — already published classes keep their sent details." : "Enter a valid e-mail address to save."}
+          footer={[
+            { label: "Cancel", onClick: close },
+            ...(ok ? [{ label: "Save", kind: "primary" as const, onClick: () => {
+              setStudentEmail(emailDraft.trim()); close(); say("E-mail updated.");
+            } }] : []),
+          ]}
+          onClose={close}
+        >
+          <label className="block">
+            <span className="label-caps mb-[6px] block">E-mail</span>
+            <input className="field w-full" type="email" autoFocus value={emailDraft} placeholder="name@example.com"
+              onChange={(e) => setEmailDraft(e.target.value)} />
+          </label>
+        </Sheet>
+      );
+    }
+
     if (sheet.kind === "publish") {
       const chosen = leaves.filter((l) => pubSel[l.id]);
       const sending = leaves.some((l) => pubStatus[l.id] === "sending");
@@ -1200,6 +1228,11 @@ export default function Page() {
           return n;
         })}
         onEditProfile={() => openProfile(META.me)}
+        email={role === "student" ? studentEmail : (meNow.email ?? "")}
+        onEditEmail={() => {
+          if (role === "student") { setEmailDraft(studentEmail); setSheet({ kind: "studentEmail" }); }
+          else openProfile(META.me);   // the SME sheet already carries the e-mail field
+        }}
       />
     );
   };

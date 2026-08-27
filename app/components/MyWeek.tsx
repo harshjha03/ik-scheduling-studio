@@ -24,6 +24,8 @@ interface Props {
   leave: string | null;
   onToggleLeave: () => void;
   onEditProfile: () => void;
+  email: string;
+  onEditEmail: () => void;
 }
 
 function Stat({ label, value, sub, size = 30 }: { label: string; value: React.ReactNode; sub: string; size?: number }) {
@@ -38,7 +40,7 @@ function Stat({ label, value, sub, size = 30 }: { label: string; value: React.Re
 
 export default function MyWeek({
   role, me, myBatch, rows, smes, courses, meta, weeks, week, weekDates, approved, availOff, preferred, vh,
-  onAvail, onPreferred, onOpen, leave, onToggleLeave, onEditProfile,
+  onAvail, onPreferred, onOpen, leave, onToggleLeave, onEditProfile, email, onEditEmail,
 }: Props) {
   const isStudent = role === "student";
   const mine = isStudent ? rows.filter((r) => r.batch_id === myBatch?.id) : rows.filter((r) => r.sme_id === me.id);
@@ -122,8 +124,14 @@ export default function MyWeek({
             <div className="text-[13px] font-bold">
               {isStudent ? `${myBatch?.id} · ${weeks[week].label}` : `My classes · ${weeks[week].label}`}
             </div>
+            <span className="ml-auto text-[11.5px]" style={{ color: "var(--muted)" }} title="Schedule updates and invites go here">
+              {email || "No e-mail on file"}
+            </span>
+            <button className="btn btn-sm" onClick={onEditEmail} title="Change where your schedule e-mails and invites go">
+              Edit e-mail
+            </button>
             {!isStudent && (
-              <button className="btn btn-sm ml-auto" onClick={onEditProfile} title="Edit your contact details and weekly preference">
+              <button className="btn btn-sm" onClick={onEditProfile} title="Edit your contact details and weekly preference">
                 Edit my profile
               </button>
             )}
