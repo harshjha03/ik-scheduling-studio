@@ -126,11 +126,8 @@ const H = `
   const sheetText = () => (sheet() ? norm(sheet().innerText) : null);
   const toast = () => { const t = document.querySelector('[role="status"]'); return t ? norm(t.innerText) : null; };
   const bg = (el) => getComputedStyle(el).backgroundColor;
-  /** The role switcher only renders while the rail is open, so pin it first. */
+  /** The role switcher only renders while the rail is open, so hover it first. */
   const openRail = async () => {
-    if (all("select").some((s) => [...s.options].some((o) => o.value === "sme"))) return true;
-    const pin = all("aside button").find((b) => /pin menu open/i.test(b.title || ""));
-    if (pin) { pin.click(); await sleep(400); }
     if (all("select").some((s) => [...s.options].some((o) => o.value === "sme"))) return true;
     document.querySelector("aside").dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
     await sleep(500);

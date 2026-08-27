@@ -35,21 +35,20 @@ export const PERSONA: Record<Role, { name: string; sub: string }> = {
 interface Props {
   role: Role;
   mod: ModuleKey;
-  pinned: boolean;
-  onPinned: (v: boolean) => void;
   onRole: (r: Role) => void;
   onMod: (m: ModuleKey) => void;
 }
 
-export default function Sidebar({ role, mod, pinned, onPinned, onRole, onMod }: Props) {
+/** A 74px rail that peeks open to 236px on hover. */
+export default function Sidebar({ role, mod, onRole, onMod }: Props) {
   const [hover, setHover] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const open = pinned || hover;
+  const open = hover;
   const persona = PERSONA[role];
 
   const enter = () => {
     if (timer.current) clearTimeout(timer.current);
-    if (!pinned) timer.current = setTimeout(() => setHover(true), 80);
+    timer.current = setTimeout(() => setHover(true), 80);
   };
   const leave = () => {
     if (timer.current) clearTimeout(timer.current);
@@ -67,10 +66,10 @@ export default function Sidebar({ role, mod, pinned, onPinned, onRole, onMod }: 
         backdropFilter: "blur(24px) saturate(180%)",
         WebkitBackdropFilter: "blur(24px) saturate(180%)",
         borderRight: "0.5px solid rgba(16,26,51,0.08)",
-        position: pinned ? "sticky" : "fixed",
+        position: "fixed",
         left: 0, top: 0, height: "100vh", zIndex: 36,
         transition: "width .34s cubic-bezier(.32,.72,0,1), box-shadow .3s ease",
-        boxShadow: !pinned && hover ? "0 20px 54px rgba(16,26,51,0.16)" : undefined,
+        boxShadow: hover ? "0 20px 54px rgba(16,26,51,0.16)" : undefined,
       }}
     >
       <div className={open
@@ -93,19 +92,6 @@ export default function Sidebar({ role, mod, pinned, onPinned, onRole, onMod }: 
             </span>
           </span>
         )}
-        <button
-          onClick={() => { onPinned(!pinned); setHover(false); }}
-          title={pinned ? "Unpin — menu will peek on hover" : "Pin menu open"}
-          aria-label={pinned ? "Unpin menu" : "Open menu"}
-          className="flex size-[26px] shrink-0 items-center justify-center rounded-[9px] bg-white text-[12px]"
-          // always visible: hovering is not an option on touch, and the role switcher lives behind it
-          style={{
-            border: "0.5px solid rgba(16,26,51,0.14)", color: "var(--muted)",
-            marginLeft: open ? "auto" : undefined,
-          }}
-        >
-          {pinned ? "«" : "»"}
-        </button>
       </div>
 
       <nav className="flex flex-col gap-[3px] px-[10px]">

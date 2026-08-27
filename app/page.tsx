@@ -88,7 +88,6 @@ export default function Page() {
   const [smeQuery, setSmeQuery] = useState("");
   const [smeFilter, setSmeFilter] = useState<SmeFilter>("all");
   const [sheet, setSheet] = useState<SheetState>(null);
-  const [navPinned, setNavPinned] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [newBatch, setNewBatch] = useState({ course: "DSA", level: "beginner", per_week: 4, learners: 30 });
@@ -1209,14 +1208,10 @@ export default function Page() {
     <div className="flex h-screen items-stretch overflow-hidden" style={{ background: "var(--page)" }}>
       <Sidebar
         role={role} mod={mod}
-        pinned={navPinned} onPinned={setNavPinned}
         onRole={(r) => { setRole(r); setMod(ROLE_MODULES[r][0]); setSheet(null); }}
         onMod={(m) => { setMod(m); setSheet(null); }}
       />
-      <main
-        className="flex min-w-0 flex-1 flex-col overflow-hidden"
-        style={{ marginLeft: navPinned ? 0 : 74, transition: "margin-left .34s cubic-bezier(.32,.72,0,1)" }}
-      >
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden" style={{ marginLeft: 74 }}>
         <div
           className="flex shrink-0 flex-wrap items-end gap-[14px] p-[18px_26px_14px]"
           style={{
