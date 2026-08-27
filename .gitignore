@@ -10,3 +10,4 @@ __pycache__/
 .claude/settings.local.json
 next-env.d.ts
 *.tsbuildinfo
+ik-schedule-*.csv

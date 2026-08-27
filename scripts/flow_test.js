@@ -10,6 +10,8 @@
  * These cover what pytest cannot: what each persona can actually see and do in the browser.
  */
 const { spawn } = require("child_process");
+const fs = require("fs");
+const os = require("os");
 
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PORT = 9333;
@@ -162,7 +164,11 @@ async function main() {
   try {
     await wait(`return has("Batches running") && cards().length > 0`, "first draft rendered", 60000);
 
-    if (!only || only === "coordinator") await coordinator(ev, wait, settle);
+    // let the export actually write a file so we can check its bytes, not just the toast
+    const dl = fs.mkdtempSync(`${os.tmpdir()}/ik-flow-dl-`);
+    await b.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
+
+    if (!only || only === "coordinator") await coordinator(ev, wait, settle, dl);
     if (!only || only === "sme") await sme(ev, wait, settle);
     if (!only || only === "student") await student(ev, wait, settle);
   } finally {
@@ -174,7 +180,7 @@ async function main() {
 }
 
 // ---------------------------------------------------------------- coordinator
-async function coordinator(ev, wait, settle) {
+async function coordinator(ev, wait, settle, dl) {
   console.log("\n=== PERSONA: ops coordinator ===");
   console.log("\n-- C1 initial draft --");
   const s1 = await ev(`return {
@@ -322,11 +328,25 @@ async function coordinator(ev, wait, settle) {
   }
 
   console.log("\n-- C10 export --");
-  const exp = await ev(`clickPart("button", "Export CSV"); return true;`);
+  await ev(`clickPart("button", "Export CSV"); return true;`);
   await settle();
-  await sleep(700);
-  const expT = await ev(`return toast()`);
-  ok(/CSV exported/.test(expT || ""), `export reports success: ${expT}`);
+  const expT = await global.__waitToast(/CSV exported/);
+  ok(!!expT, `export reports success: ${expT}`);
+  // the spec pins the CSV shape, so check the file itself
+  let csv = null;
+  for (let i = 0; i < 40 && !csv; i++) {
+    const f = fs.readdirSync(dl).filter((x) => x.endsWith(".csv"));
+    if (f.length) csv = { name: f[0], text: fs.readFileSync(`${dl}/${f[0]}`, "utf8") };
+    else await sleep(250);
+  }
+  ok(!!csv, "export writes a .csv file");
+  if (csv) {
+    const [header, ...body] = csv.text.trim().split(/\r?\n/);
+    const SPEC = "week,date,time_ist,batch,subject,sub_specialty,session_type,sme_name,status,flags";
+    ok(header === SPEC, "CSV header is exactly the specified columns", header);
+    ok(body.length === 41, `one row per class (${body.length})`);
+    ok(/^ik-schedule-\d{4}-W\d{2}\.csv$/.test(csv.name), `file is named for the week (${csv.name})`);
+  }
 
   console.log("\n-- C11 SME management --");
   const smes = await ev(`
