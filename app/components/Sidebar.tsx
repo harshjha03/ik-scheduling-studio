@@ -35,13 +35,13 @@ export const PERSONA: Record<Role, { name: string; sub: string }> = {
 interface Props {
   role: Role;
   mod: ModuleKey;
-  badges?: Partial<Record<ModuleKey, number>>;
+  pinned: boolean;
+  onPinned: (v: boolean) => void;
   onRole: (r: Role) => void;
   onMod: (m: ModuleKey) => void;
 }
 
-export default function Sidebar({ role, mod, badges = {}, onRole, onMod }: Props) {
-  const [pinned, setPinned] = useState(false);
+export default function Sidebar({ role, mod, pinned, onPinned, onRole, onMod }: Props) {
   const [hover, setHover] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const open = pinned || hover;
@@ -94,7 +94,7 @@ export default function Sidebar({ role, mod, badges = {}, onRole, onMod }: Props
           </span>
         )}
         <button
-          onClick={() => { setPinned(!pinned); setHover(false); }}
+          onClick={() => { onPinned(!pinned); setHover(false); }}
           title={pinned ? "Unpin — menu will peek on hover" : "Pin menu open"}
           aria-label={pinned ? "Unpin menu" : "Open menu"}
           className="flex size-[26px] shrink-0 items-center justify-center rounded-[9px] bg-white text-[12px]"
@@ -112,7 +112,6 @@ export default function Sidebar({ role, mod, badges = {}, onRole, onMod }: Props
         {ROLE_MODULES[role].map((m) => {
           const on = mod === m;
           const label = MODULES[m].label;
-          const badge = badges[m];
           return (
             <button
               key={m}
@@ -134,14 +133,6 @@ export default function Sidebar({ role, mod, badges = {}, onRole, onMod }: Props
                 <path d={ICONS[m]} />
               </svg>
               {open && <span className="overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>}
-              {!!badge && (
-                <span
-                  className="ml-auto rounded-[7px] px-[7px] text-[11px] font-bold text-white"
-                  style={{ background: "var(--red)" }}
-                >
-                  {badge}
-                </span>
-              )}
             </button>
           );
         })}

@@ -22,6 +22,11 @@ export interface Batch {
   weeks_done: number;
   weeks_total: number;
   started: string;
+  /** where the cohort is reachable when the week is published */
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  /** cohort calendar to publish into; null falls back to the shared GOOGLE_CALENDAR_ID */
+  calendar_id?: string | null;
 }
 
 export interface WeekMeta {
@@ -71,6 +76,9 @@ export interface HistoryWeek {
 export interface SME {
   id: string;
   name: string;
+  /** publish targets — absent means that channel reports no recipients for this teacher */
+  email?: string | null;
+  phone?: string | null;
   subject: string;
   subjects: string[];
   sub_specialty: string | null;
@@ -254,7 +262,7 @@ export interface WorkItem {
 export type Audience = "sme" | "stu";
 export type ChannelKey = "cal" | "email" | "sms";
 export type LeafId = `${ChannelKey}:${Audience}`;
-export type SendState = "idle" | "ready" | "sending" | "sent";
+export type SendState = "idle" | "ready" | "sending" | "sent" | "simulated" | "skipped" | "error";
 
 export interface PublishLeaf {
   id: LeafId;
@@ -299,4 +307,19 @@ export type SheetState =
   | { kind: "publish" }
   | { kind: "newClass" }
   | { kind: "newBatch" }
+  | { kind: "import" }
+  | { kind: "smeImport" }
+  | { kind: "profile" }
   | null;
+
+/** The editable half of an SME record — contact details and the weekly preference. Skills, level
+ *  and ratings stay with ops, so an SME editing their own profile sees those as read-only. */
+export interface Profile {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  city: string;
+  level: LevelName;
+  preferred: string;
+}

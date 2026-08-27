@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { avatarBg, initials } from "@/lib/view";
 
 export interface SheetFact { label: string; value: React.ReactNode }
-export interface SheetAction { label: string; kind?: "primary" | "go" | "ghost"; onClick: () => void; disabled?: boolean }
+export interface SheetAction { label: string; kind?: "primary" | "go" | "ghost" | "quiet"; onClick: () => void; disabled?: boolean }
 
 interface Props {
   width?: number;
@@ -138,7 +138,7 @@ export default function Sheet({
                   key={a.label}
                   onClick={a.onClick}
                   disabled={a.disabled}
-                  className={`btn ${a.kind === "primary" ? "btn-primary" : a.kind === "go" ? "btn-go" : ""}`}
+                  className={a.kind === "quiet" ? "btn-quiet" : `btn ${a.kind === "primary" ? "btn-primary" : a.kind === "go" ? "btn-go" : ""}`}
                 >
                   {a.label}
                 </button>

@@ -11,24 +11,30 @@ import weeksJson from "@/data/weeks.json";
 import metaJson from "@/data/meta.json";
 import type {
   Batch, Category, Course, Decision, DraftRow, Fix, HistoryRecord, LeafId, Meta, ModuleKey, NewClass, OverrideEvent,
-  ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
+  Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
-import { runMatching, submitApprovals } from "@/lib/api";
+import {
+  loadSchedule, publishLeaf, runMatching, saveSchedule, submitApprovals,
+} from "@/lib/api";
 import { csvExporter } from "@/lib/export";
+import {
+  classTemplate, downloadCsv, emptyImport, isWorkbook, parseClassImport, parseSmeImport, smeTemplate, toSme,
+  WORKBOOK_HINT, type ImportedClass, type ImportedSme, type ImportResult,
+} from "@/lib/import";
 import {
   FLAG_LABEL, SEV_CHIP, applyAvailabilityBlocks, autoFix, isAvailable, istParts, nextBatchId, newBatchSessions,
   publishLeaves, sendSummary, sheetCandidates, weekAsHistory, workItems, type SmeFilter,
 } from "@/lib/view";
 import Sidebar, { MODULES, PERSONA, ROLE_MODULES } from "./components/Sidebar";
-import LlmBanner from "./components/LlmBanner";
 import KpiCards from "./components/KpiCards";
 import Dashboard from "./components/Dashboard";
 import SmeManagement from "./components/SmeManagement";
 import BatchManagement from "./components/BatchManagement";
-import MyWeek, { type PendingChange } from "./components/MyWeek";
+import MyWeek from "./components/MyWeek";
 import Sheet, { PersonRow, SectionLabel } from "./components/Sheet";
 import WorkSheet from "./components/WorkSheet";
 import PublishSheet from "./components/PublishSheet";
+import ImportSheet from "./components/ImportSheet";
 import Toast from "./components/Toast";
 
 // JSON imports infer over-narrow literal unions; the engine owns the schema.
@@ -65,11 +71,16 @@ export default function Page() {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [resolvedLog, setResolvedLog] = useState<ResolvedEntry[]>([]);
   const [leave, setLeave] = useState<Record<string, string>>({});
-  const [droppedOut, setDroppedOut] = useState<string[]>([]);
   const [availOff, setAvailOff] = useState<Record<string, boolean>>({});
-  const [pending, setPending] = useState<PendingChange[]>([]);
+  // a live-week teacher change waits on the SME; the class sheet reports it as pending
+  const [pending, setPending] = useState<{ session_id: string; sme_id: string; name: string; from_sme_id: string | null }[]>([]);
   const [batches, setBatches] = useState<Batch[]>(BATCHES0);
   const [extraSessions, setExtraSessions] = useState<Session[]>([]);
+  const [extraSmes, setExtraSmes] = useState<SME[]>([]);
+  const [smeEdits, setSmeEdits] = useState<Record<string, Partial<SME>>>({});
+  const [imp, setImp] = useState<ImportResult<ImportedClass>>(emptyImport);
+  const [smeImp, setSmeImp] = useState<ImportResult<ImportedSme>>(emptyImport);
+  const [prof, setProf] = useState<Profile | null>(null);
   const [selSme, setSelSme] = useState("T01");
   const [selBatch, setSelBatch] = useState("DSA-01");
   const [batchFilter, setBatchFilter] = useState("all");
@@ -77,7 +88,7 @@ export default function Page() {
   const [smeQuery, setSmeQuery] = useState("");
   const [smeFilter, setSmeFilter] = useState<SmeFilter>("all");
   const [sheet, setSheet] = useState<SheetState>(null);
-  const [armed, setArmed] = useState<string | null>(null);
+  const [navPinned, setNavPinned] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [newBatch, setNewBatch] = useState({ course: "DSA", level: "beginner", per_week: 4, learners: 30 });
@@ -107,9 +118,12 @@ export default function Page() {
     };
   }, []);
 
-  const smesFor = useCallback((w: WeekKey): SME[] => SMES[w].map((s) => (
-    droppedOut.includes(s.id) ? { ...s, weekly_availability: [] } : s
-  )), [droppedOut]);
+  /** The seed roster plus whatever ops added or edited this session — imports and profile edits. */
+  const rosterFor = useCallback((w: WeekKey): SME[] => (
+    [...SMES[w], ...extraSmes].map((s) => (smeEdits[s.id] ? { ...s, ...smeEdits[s.id] } : s))
+  ), [extraSmes, smeEdits]);
+
+  const smesFor = useCallback((w: WeekKey): SME[] => rosterFor(w), [rosterFor]);
 
   const sessionsFor = useCallback((w: WeekKey): Session[] => (
     w === "next" ? [...SESSIONS.next, ...extraSessions] : SESSIONS.current
@@ -117,20 +131,17 @@ export default function Page() {
 
   /** Draft the next week on top of the settled current week. */
   const runNext = useCallback(async (opts: {
-    overrides?: OverrideEvent[]; dropped?: string[]; sessions?: Session[];
+    overrides?: OverrideEvent[]; sessions?: Session[];
     availOff?: Record<string, boolean>; quiet?: boolean;
   } = {}) => {
     const cur = runs.current;
     if (!cur) return;
     setLoading(true);
     try {
-      const dropped = opts.dropped ?? droppedOut;
       const blocks = opts.availOff ?? availOff;
-      const smes = SMES.next.map((s) => {
-        if (dropped.includes(s.id)) return { ...s, weekly_availability: [] };
-        return s.id === META.me ? applyAvailabilityBlocks(s, blocks) : s;   // the SME's own blocks
-      });
-      const history = weekAsHistory(cur.draft, SMES.next, WEEKS.current.iso, HISTORY);
+      const roster = rosterFor("next");
+      const smes = roster.map((s) => (s.id === META.me ? applyAvailabilityBlocks(s, blocks) : s));   // the SME's own blocks
+      const history = weekAsHistory(cur.draft, roster, WEEKS.current.iso, HISTORY);
       const sessions = opts.sessions ?? sessionsFor("next");
       const res = await runMatching(sessions, smes, history, opts.overrides ?? overrides, { llm: true });
       const prev = nextRef.current;
@@ -145,6 +156,8 @@ export default function Page() {
       nextRef.current = res.draft;
       setChanged(changedIds);
       setRuns((s) => ({ ...s, next: res }));
+      // durable copy, so a refresh does not lose the coordinator's work
+      void saveSchedule(WEEKS.next.iso, res.draft, { stats: res.stats, flags: res.flags, published: false }).catch(() => {});
       setApproved((a) => new Set([...a].filter((id) => !res.draft.some((r) => r.session_id === id))));
       setPublished((p) => ({ ...p, next: false }));   // a re-draft invalidates what people were sent
       setDecisions({});
@@ -164,7 +177,7 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, [runs.current, droppedOut, availOff, overrides, sessionsFor, say]);
+  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, say]);
 
   // initial load: settle the current week (no LLM), then draft the next on top of it
   useEffect(() => {
@@ -177,11 +190,22 @@ export default function Page() {
         setRuns((s) => ({ ...s, current: cur }));
         setApproved(new Set(cur.draft.filter((r) => r.sme_id).map((r) => r.session_id)));
         setPublished({ current: true });
+        // a saved draft wins over a fresh run — it holds the decisions ops already made
+        const saved = await loadSchedule(WEEKS.next.iso).catch(() => null);
+        if (saved?.draft?.length && saved.stats) {
+          if (!alive) return;
+          nextRef.current = saved.draft;
+          setRuns((s) => ({ ...s, next: { draft: saved.draft, flags: saved.flags ?? [], stats: saved.stats! } }));
+          if (saved.published) setPublished((p) => ({ ...p, next: true }));
+          say(`Restored the draft you saved at ${new Date(saved.updated_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}.`);
+          return;
+        }
         const history = weekAsHistory(cur.draft, SMES.next, WEEKS.current.iso, HISTORY);
         const nxt = await runMatching(SESSIONS.next, SMES.next, history, [], { llm: true });
         if (!alive) return;
         nextRef.current = nxt.draft;
         setRuns((s) => ({ ...s, next: nxt }));
+        void saveSchedule(WEEKS.next.iso, nxt.draft, { stats: nxt.stats, flags: nxt.flags, published: false }).catch(() => {});
       } catch (e) {
         say(String(e).slice(0, 160));
       } finally {
@@ -194,8 +218,8 @@ export default function Page() {
   const run = runs[week];
   const rows = useMemo(() => run?.draft ?? [], [run]);
   const smes = useMemo(() => smesFor(week), [smesFor, week]);
-  const smeName = useCallback((id: string | null) => SMES.next.find((s) => s.id === id)?.name ?? id ?? "—", []);
-  const me = SMES.next.find((s) => s.id === META.me)!;
+  const smeName = useCallback((id: string | null) => rosterFor("next").find((s) => s.id === id)?.name ?? id ?? "—", [rosterFor]);
+  const me = rosterFor("next").find((s) => s.id === META.me)!;
   const [preferred, setPreferred] = useState(me.preferred);
   const meNow = useMemo(() => applyAvailabilityBlocks(me, availOff), [me, availOff]);
   const isPublished = !!published[week];
@@ -234,12 +258,10 @@ export default function Page() {
   }, []);
 
   const openClass = (sessionId: string, stage: "info" | "pick" = "info") => {
-    setArmed(null);
     setSheet({ kind: "class", sessionId, week, stage });
   };
 
   const assign = (row: DraftRow, smeId: string, name: string, blocked: boolean, quiet = false) => {
-    setArmed(null);
     if (WEEKS[week].locked) {
       setPending((p) => [...p.filter((x) => x.session_id !== row.session_id),
         { session_id: row.session_id, sme_id: smeId, name, from_sme_id: row.sme_id }]);
@@ -258,7 +280,7 @@ export default function Page() {
       from_sme_id: row.sme_id, to_sme_id: smeId, to_sme_name: name, at: new Date().toISOString(),
       note: blocked
         ? "Breaks a hard rule — kept visible as OVERRIDE RISK on the row."
-        : "−0.2 on the old pairing, +0.1 on yours in the next run.",
+        : "Applied now; the next draft scores this pairing +0.1 and the old one −0.2.",
     }, ...log]);
     patchRow(week, row.session_id, (x) => ({
       ...x,
@@ -339,26 +361,37 @@ export default function Page() {
 
   const leaves = useMemo(() => publishLeaves(rows, batches), [rows, batches]);
 
-  const publishWeek = () => {
+  /** Publish for real, one leaf at a time: the API sends where it has credentials and reports
+   *  `simulated` where it does not — either way the outcome is recorded server-side. */
+  const publishWeek = async () => {
     const list = leaves.filter((l) => pubSel[l.id]);
     if (!list.length) { say("Pick at least one channel and audience."); return; }
     const token = pubToken.current + 1;
     pubToken.current = token;
-    pubTimers.current.forEach(clearTimeout);
-    pubTimers.current = [];
     setPubStatus(Object.fromEntries(list.map((l) => [l.id, "sending" as SendState])));
-    list.forEach((l, i) => {
-      pubTimers.current.push(setTimeout(() => {
-        // a cancel (or unmount) invalidates the token, so nothing publishes behind the user's back
+    let anyLive = false;
+    for (const l of list) {
+      if (pubToken.current !== token) return;          // cancelled mid-flight
+      try {
+        const res = await publishLeaf({
+          week: WEEKS[week].iso, week_label: WEEKS[week].label, channel: l.channel.key, audience: l.audience.key,
+          rows, smes: rosterFor("next"), batches,
+        });
         if (pubToken.current !== token) return;
-        setPubStatus((s) => ({ ...s, [l.id]: "sent" }));
-        if (i !== list.length - 1) return;
-        setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
-        setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
-        setPublished((p) => ({ ...p, [week]: true }));
-        say(`Week published — ${sendSummary(list)}.`);
-      }, 380 + i * 340));
-    });
+        anyLive = anyLive || res.live;
+        setPubStatus((s) => ({ ...s, [l.id]: res.status as SendState }));   // sent | simulated | skipped | error
+      } catch {
+        setPubStatus((s) => ({ ...s, [l.id]: "idle" }));
+      }
+    }
+    if (pubToken.current !== token) return;
+    setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
+    setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
+    setPublished((p) => ({ ...p, [week]: true }));
+    void saveSchedule(WEEKS[week].iso, rows, { published: true }).catch(() => {});
+    say(anyLive
+      ? `Week published — ${sendSummary(list)}.`
+      : `Week marked published — ${sendSummary(list)} simulated (no channel credentials yet).`);
   };
 
   const cancelPublish = () => {
@@ -390,15 +423,6 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const dropOut = async (smeId: string) => {
-    const next = [...new Set([...droppedOut, smeId])];
-    setDroppedOut(next);
-    setWeek("next");
-    const res = await runNext({ dropped: next, quiet: true });
-    const unf = res ? res.draft.filter((r) => !r.sme_id).length : 0;
-    say(`${smeName(smeId)} marked unavailable — draft re-run, ${unf} class(es) now unfilled.`);
   };
 
   const createBatch = async () => {
@@ -451,13 +475,139 @@ export default function Page() {
     setSheet(null);
     setWeek("next");
     if (published.next) setPublished((p) => ({ ...p, next: false }));
-    setOverrides((log) => [{
+    // a chosen teacher rides in as a named override so the engine honours it or says why it cannot
+    const named: OverrideEvent[] = newClass.smeId ? [{
       kind: "assigned", session_id: session.id, batch_id: bt.id, week: "next",
-      from_sme_id: null, to_sme_id: newClass.smeId || "", to_sme_name: newClass.smeId ? smeName(newClass.smeId) : "—",
-      at: new Date().toISOString(), note: "Added by ops outside the weekly run — the next draft staffs it.",
-    }, ...log]);
-    await runNext({ sessions: [...sessionsFor("next"), session], quiet: true });
-    say(`${newClass.topic} added to ${bt.id} — the draft has staffed it${published.next ? ". Re-publish to update calendars." : "."}`);
+      from_sme_id: null, to_sme_id: newClass.smeId, to_sme_name: smeName(newClass.smeId),
+      at: new Date().toISOString(), note: "Added by ops outside the weekly run.",
+    }] : [];
+    setOverrides((log) => [...(named.length ? named : [{
+      kind: "assigned" as const, session_id: session.id, batch_id: bt.id, week: "next" as const,
+      from_sme_id: null, to_sme_id: "", to_sme_name: "—",
+      at: new Date().toISOString(), note: "Added by ops — needs a teacher before the week can publish.",
+    }]), ...log]);
+    await runNext({ sessions: [...sessionsFor("next"), session], overrides: [...named, ...overrides], quiet: true });
+    say(newClass.smeId
+      ? `${newClass.topic} added to ${bt.id} — ${smeName(newClass.smeId)} assigned.${published.next ? " Re-publish to update calendars." : ""}`
+      : `${newClass.topic} added to ${bt.id} — the draft staffs it from the eligible pool.`);
+  };
+
+  // ---------- the Excel round-trip ----------
+
+  const readCsv = (file: File, onText: (text: string) => void, onWorkbook: () => void) => {
+    if (isWorkbook(file.name)) { onWorkbook(); return; }
+    const fr = new FileReader();
+    fr.onload = () => onText(String(fr.result ?? ""));
+    fr.readAsText(file);
+  };
+
+  /** What the week already holds, so an upload cannot double-book a batch or a teacher. */
+  const takenSlots = () => rows.map((r) => {
+    const p = istParts(r.start_utc);
+    return { smeId: r.sme_id, day: p.day, hour: p.hour, batch: r.batch_id };
+  });
+
+  const onImportFile = (file: File) => readCsv(
+    file,
+    (text) => setImp(parseClassImport(file.name, text, {
+      courses: COURSES, levels: META.levels, types: META.type_label, days: META.days,
+      hours: META.hours, taken: takenSlots(), smes: smesFor("next"),
+      isAvailable: (s, d, h) => isAvailable(s, SESSIONS.next[0].start_utc, d, h),
+    })),
+    () => setImp({ name: file.name, rows: [], errors: [WORKBOOK_HINT], parsed: true }),
+  );
+
+  const onSmeImportFile = (file: File) => readCsv(
+    file,
+    (text) => setSmeImp(parseSmeImport(file.name, text, {
+      courses: COURSES, levels: META.levels, days: META.days, smes: rosterFor("next"),
+    })),
+    () => setSmeImp({ name: file.name, rows: [], errors: [WORKBOOK_HINT], parsed: true }),
+  );
+
+  /** Imported classes become real sessions and go through the same pipeline as everything else —
+   *  a named teacher rides in as an override so the engine honours it or says why it cannot. */
+  const runImport = async () => {
+    const ref = SESSIONS.next[0].start_utc;
+    const p0 = istParts(ref);
+    const known = new Set(batches.map((b) => b.id));
+    const fresh: Batch[] = [];
+    const sessions: Session[] = [];
+    const named: OverrideEvent[] = [];
+    const at = new Date().toISOString();
+
+    imp.rows.forEach((r, i) => {
+      if (!known.has(r.batch)) {
+        known.add(r.batch);
+        fresh.push({ id: r.batch, course: r.course, level: r.level, learners: r.learners,
+          per_week: 4, weeks_done: 0, weeks_total: 12, started: "7 Sep 2026" });
+      }
+      const when = new Date(new Date(ref).getTime() + (r.day - p0.day) * 864e5 + (r.hour - p0.hour) * 36e5);
+      const id = `${WEEKS.next.iso.split("-")[1]}-${r.batch}-i${i + 1}`;
+      sessions.push({
+        id, batch_id: r.batch, subject: r.course,
+        sub_specialty: r.type === "class" ? r.topic : null, type: r.type,
+        start_utc: when.toISOString().replace(/\.\d+Z$/, "Z"), duration_min: 60, mode: "online",
+        required_training_level: META.levels.indexOf(r.level) + 1,
+      });
+      if (r.smeId) {
+        named.push({ kind: "assigned", session_id: id, batch_id: r.batch, week: "next",
+          from_sme_id: null, to_sme_id: r.smeId, to_sme_name: r.smeName ?? smeName(r.smeId), at,
+          note: `Named in ${imp.name}.` });
+      }
+    });
+
+    const unfilled = imp.rows.length - named.length;
+    const log: OverrideEvent = {
+      kind: "assigned", session_id: sessions[0]?.id ?? "", batch_id: imp.rows[0]?.batch ?? "—", week: "next",
+      from_sme_id: null, to_sme_id: "", to_sme_name: "ops", at,
+      note: `${imp.rows.length} classes imported from ${imp.name}${fresh.length ? ` · ${fresh.length} new batch${fresh.length === 1 ? "" : "es"} created` : ""}${unfilled ? ` · ${unfilled} still awaiting a teacher` : ""}.`,
+    };
+
+    if (fresh.length) setBatches((b) => [...b, ...fresh]);
+    setExtraSessions((s) => [...s, ...sessions]);
+    setOverrides((l) => [log, ...named, ...l]);
+    setSheet(null);
+    setImp(emptyImport());
+    setMod("dashboard");
+    setTab("schedule");
+    setWeek("next");
+    await runNext({ sessions: [...sessionsFor("next"), ...sessions], overrides: [...named, ...overrides], quiet: true });
+    say(`${imp.rows.length} classes imported${fresh.length ? ` · ${fresh.length} new batch${fresh.length === 1 ? "" : "es"}` : ""}.`);
+  };
+
+  /** Imported teachers join the pool and are assignable on the very next draft. */
+  const runSmeImport = async () => {
+    const added = smeImp.rows.map((r) => toSme(r, META.days, META.levels));
+    setExtraSmes((s) => [...s, ...added]);
+    setSheet(null);
+    setSmeImp(emptyImport());
+    setSmeFilter("all");
+    setSmeQuery("");
+    setMod("smes");
+    if (added[0]) setSelSme(added[0].id);
+    say(`${added.length} SME${added.length === 1 ? "" : "s"} added to the pool — they are assignable right away.`);
+  };
+
+  const openProfile = (id: string) => {
+    const s = rosterFor("next").find((x) => x.id === id);
+    if (!s) return;
+    setProf({ id: s.id, name: s.name, email: s.email ?? "", phone: s.phone ?? "", city: s.city, level: s.level, preferred: String(s.preferred) });
+    setSheet({ kind: "profile" });
+  };
+
+  const saveProfile = () => {
+    if (!prof) return;
+    const pref = Math.max(1, Math.min(8, parseInt(prof.preferred, 10) || 4));
+    setSmeEdits((e) => ({
+      ...e,
+      [prof.id]: { ...e[prof.id], name: prof.name.trim(), email: prof.email.trim(), phone: prof.phone.trim(),
+        city: prof.city.trim(), level: prof.level, preferred: pref, training_level: META.levels.indexOf(prof.level) + 1 },
+    }));
+    if (prof.id === META.me) setPreferred(pref);
+    setSheet(null);
+    setProf(null);
+    say(`${prof.name.trim()}’s profile updated.`);
   };
 
   const requestCover = (row: DraftRow) => {
@@ -468,18 +618,6 @@ export default function Page() {
     }, ...log]);
     setSheet(null);
     say("Sent to ops — they will find cover and confirm.");
-  };
-
-  const resolvePending = (sessionId: string, accept: boolean) => {
-    const p = pending.find((x) => x.session_id === sessionId);
-    setPending((list) => list.filter((x) => x.session_id !== sessionId));
-    if (!p) return;
-    if (accept) {
-      patchRow("current", sessionId, (x) => ({ ...x, sme_id: p.sme_id, sme_name: p.name, stage: "override" as const }));
-      say("Change accepted — learners will see the new instructor.");
-    } else {
-      say("Change declined — ops has been notified.");
-    }
   };
 
   const toggleAvail = async (key: string) => {
@@ -528,24 +666,179 @@ export default function Page() {
       );
     }
 
+    if (sheet.kind === "import" || sheet.kind === "smeImport") {
+      const sme = sheet.kind === "smeImport";
+      const im = sme ? smeImp : imp;
+      const ok = im.rows.length, bad = im.errors.length;
+      const reset = () => (sme ? setSmeImp(emptyImport()) : setImp(emptyImport()));
+      const noTeacher = sme
+        ? smeImp.rows.filter((r) => !r.topics.length).length
+        : imp.rows.filter((r) => !r.smeId).length;
+      const steps = sme
+        ? [
+          { n: "1", title: "Download the SME template",
+            sub: "Eleven columns — name, email, phone, city, courses, topics, level, weekly preference and working hours — with two example rows.",
+            action: "Download", onAction: () => { downloadCsv(smeTemplate(COURSES, META.levels), "ik-sme-template"); say("SME template downloaded — fill it in Excel and upload it back."); } },
+          { n: "2", title: "One row per teacher",
+            sub: "Email is required and must be unique — it is how invites and the weekly schedule reach them. Leave sme_id blank and we issue the next one." },
+          { n: "3", title: "Save as CSV and upload",
+            sub: "We check every row against the course topics and level rules before anything is created." },
+        ]
+        : [
+          { n: "1", title: "Download the template",
+            sub: "Nine columns with two example rows and the allowed values listed at the bottom. Opens straight in Excel.",
+            action: "Download", onAction: () => { downloadCsv(classTemplate(batches, COURSES, META.days, META.hours, rosterFor("next")), "ik-schedule-template"); say("Template downloaded — fill it in Excel and upload it back."); } },
+          { n: "2", title: "Fill one row per class",
+            sub: "A new batch_id creates the batch; an existing one adds to it. Leave sme_name blank and the scheduler fills it." },
+          { n: "3", title: "Upload it back",
+            sub: "Every row is checked against courses, topics, working hours and double bookings before anything is created." },
+        ];
+      return (
+        <Sheet
+          width={620} eyebrow={sme ? "SME management" : "Batch management"}
+          title={im.parsed ? "Check the upload" : sme ? "Import SMEs" : "Import from Excel"}
+          subtitle={im.parsed
+            ? `${im.name} · ${ok} ${sme ? `SME${ok === 1 ? "" : "s"}` : `row${ok === 1 ? "" : "s"}`} ready${bad ? `, ${bad} to fix` : ""}`
+            : sme
+              ? "Onboard a batch of teachers at once. Download the template so the columns match, fill it in Excel, upload it back."
+              : "Bring your batch → class → SME tracker in. Download the template so the columns match, fill it in Excel, upload it back."}
+          footerNote={im.parsed
+            ? (ok
+              ? sme
+                ? "New SMEs join the pool straight away and become assignable for unfilled classes."
+                : `Imports into ${WEEKS.next.label.toLowerCase()} · anything without a teacher lands in Work items`
+              : "Fix the rows above in Excel and upload again")
+            : "Nothing is created until you review the check."}
+          footer={im.parsed
+            ? [
+              { label: "Upload another", onClick: reset },
+              ...(ok ? [{
+                label: sme ? `Add ${ok} SME${ok === 1 ? "" : "s"}` : `Import ${ok} class${ok === 1 ? "" : "es"}`,
+                kind: "go" as const, onClick: () => void (sme ? runSmeImport() : runImport()),
+              }] : []),
+            ]
+            : [{ label: "Cancel", onClick: () => setSheet(null) }]}
+          onClose={() => { setSheet(null); reset(); }}
+        >
+          <ImportSheet
+            steps={im.parsed ? null : steps}
+            stepSize={sme ? 22 : 24}
+            warnInk={sme ? "#8a5218" : "#8a6512"}
+            dropTitle="Choose your populated file"
+            dropSub="CSV saved from Excel · we check it before importing"
+            onFile={sme ? onSmeImportFile : onImportFile}
+            tallies={im.parsed ? [
+              { value: ok, label: sme ? "ready to add" : "ready to import", tone: ok ? "good" : "warn" },
+              { value: bad, label: "need fixing", tone: bad ? "bad" : "good" },
+              { value: noTeacher, label: sme ? "no topics yet" : "no teacher yet", tone: "warn" },
+            ] : null}
+            issues={im.errors}
+            preview={sme
+              ? smeImp.rows.map((r) => ({ key: r.id, tag: r.id, main: r.name, when: r.email, who: `${r.level} · ${r.preferred}/wk`, whoTone: "plain" as const }))
+              : imp.rows.map((r, i) => ({
+                key: `${r.batch}-${i}`, tag: r.batch, main: `${r.topic} · ${META.type_label[r.type]}`,
+                when: `${META.days[r.day]} ${String(r.hour).padStart(2, "0")}:00`,
+                who: r.smeId ? smeName(r.smeId) : "to be filled", whoTone: r.smeId ? "good" as const : "warn" as const,
+              }))}
+          />
+        </Sheet>
+      );
+    }
+
+    if (sheet.kind === "profile") {
+      if (!prof) return null;
+      const self = role !== "coordinator";
+      const sm = rosterFor("next").find((x) => x.id === prof.id);
+      const emailOk = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(prof.email.trim());
+      const nameOk = prof.name.trim().length > 1;
+      const set = (k: keyof Profile) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+        setProf((p) => (p ? { ...p, [k]: e.target.value } : p));
+      // the artboard's own field metrics — `.label-caps` is 10.5px, this form's labels are 11px
+      const LABEL: React.CSSProperties = {
+        display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase",
+        letterSpacing: "0.06em", color: "var(--muted-3)", marginBottom: 6,
+      };
+      const HINT: React.CSSProperties = { display: "block", fontSize: 11, color: "var(--muted-2)", marginTop: 5, lineHeight: 1.4 };
+      const READONLY: React.CSSProperties = {
+        display: "block", borderRadius: 11, border: "1px solid #edf1f7", background: "#f7f9fc",
+        padding: "9px 10px", fontSize: 12.5, color: "var(--muted)",
+      };
+      const field = (label: string, hint: string, node: React.ReactNode, wide = false) => (
+        <label className={wide ? "col-span-2 block" : "block"} key={label}>
+          <span style={LABEL}>{label}</span>
+          {node}
+          {hint && <span style={HINT}>{hint}</span>}
+        </label>
+      );
+      return (
+        <Sheet
+          width={560} eyebrow={self ? "My profile" : "SME management"}
+          title={self ? "Edit my profile basics" : `Edit ${sm ? sm.name : "SME"}`}
+          subtitle={self
+            ? "Contact details and your weekly preference. Skills, level and ratings are maintained by ops."
+            : `${prof.id} · ${sm ? sm.topics.length : 0} topic(s) · rating ${sm && sm.rating ? sm.rating.toFixed(1) : "not rated yet"}. Topics and availability are edited from the calendar below.`}
+          footerNote={emailOk && nameOk
+            ? "Changes apply to future invites — already published classes keep their sent details."
+            : "Fix the highlighted fields to save."}
+          footer={[
+            { label: "Cancel", onClick: () => { setSheet(null); setProf(null); } },
+            ...(emailOk && nameOk ? [{ label: "Save changes", kind: "primary" as const, onClick: saveProfile }] : []),
+          ]}
+          onClose={() => { setSheet(null); setProf(null); }}
+        >
+          <div className="grid grid-cols-2 gap-[12px]">
+            {field("SME ID", "System-issued, cannot be changed", <span style={READONLY}>{prof.id}</span>)}
+            {field("Full name", nameOk ? "" : "A name is required",
+              <input className="field w-full" value={prof.name} placeholder="e.g. Rahul Desai" onChange={set("name")} />)}
+            {field("Email", emailOk ? "Class invites and the weekly schedule go here" : "That does not look like an email address",
+              <input className="field w-full" value={prof.email} placeholder="name@interviewkickstart.com" onChange={set("email")} />, true)}
+            {field("Phone", "Used for SMS reminders",
+              <input className="field w-full" value={prof.phone} placeholder="+91 98230 60417" onChange={set("phone")} />)}
+            {field("City", "Sets the time-zone note on invites",
+              <input className="field w-full" value={prof.city} placeholder="e.g. Pune" onChange={set("city")} />)}
+            {field("Level", self ? "Set by ops as you clear classes" : "Advanced unlocks advanced batches and mocks",
+              self
+                ? <span style={READONLY}>{prof.level}</span>
+                : (
+                  <select className="field w-full" value={prof.level} onChange={set("level")}>
+                    {META.levels.map((l) => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                ))}
+            {field("Classes a week", "The scheduler treats this as a soft cap",
+              <input className="field w-full" type="number" min={1} max={8} value={prof.preferred} onChange={set("preferred")} />)}
+          </div>
+        </Sheet>
+      );
+    }
+
     if (sheet.kind === "publish") {
       const chosen = leaves.filter((l) => pubSel[l.id]);
       const sending = leaves.some((l) => pubStatus[l.id] === "sending");
       const sent = leaves.filter((l) => pubStatus[l.id] === "sent");
-      const done = sent.length > 0 && !sending;
+      const settled = leaves.filter((l) => ["sent", "simulated", "skipped", "error"].includes(pubStatus[l.id]));
+      const done = settled.length > 0 && !sending;
       const allOn = chosen.length === leaves.length;
+      const reachSmes = new Set(rows.filter((r) => r.sme_id).map((r) => r.sme_id)).size;
+      const reachLearners = batches.filter((b) => rows.some((r) => r.batch_id === b.id)).reduce((a, b) => a + b.learners, 0);
       return (
         <Sheet
           width={580} eyebrow={`${WEEKS[week].label} · ${WEEKS[week].range}`}
           title={done ? "Week published" : "Publish the week"}
-          subtitle={done ? sendSummary(sent) : `Pick who hears about it and how — ${rows.length} classes this week.`}
-          footerNote={done ? "SMEs and students can see the published week now."
+          subtitle={done
+            ? sendSummary(settled)
+            : `Pick who hears about it and how — ${reachSmes} SMEs, ${reachLearners} students.`}
+          footerNote={done
+            ? "SMEs and students can see the published week now."
             : sending ? "Delivering — do not close this window."
               : allOn ? "Everyone gets every channel." : `${chosen.length} of ${leaves.length} selected`}
           footer={done
             ? [{ label: "Done", kind: "go" as const, onClick: () => setSheet(null) }]
             : [
               { label: "Cancel", onClick: cancelPublish },
+              ...(allOn || sending ? [] : [{
+                label: "Select everything", kind: "quiet" as const,
+                onClick: () => setPubSel(Object.fromEntries(leaves.map((l) => [l.id, true]))),
+              }]),
               { label: sending ? "Sending…" : allOn ? "Send all" : `Send selected · ${chosen.length}`,
                 kind: "go" as const, disabled: sending, onClick: publishWeek },
             ]}
@@ -568,19 +861,30 @@ export default function Page() {
       const clash = rows.filter((r) => r.batch_id === bt.id
         && istParts(r.start_utc).day === newClass.day && istParts(r.start_utc).hour === newClass.hour);
       const hours = Array.from({ length: META.hours[1] - META.hours[0] }, (_, i) => META.hours[0] + i);
-      const set = <K extends keyof NewClass>(k: K, v: NewClass[K]) => setNewClass((n) => ({ ...n, [k]: v }));
+      // a slot or topic change can invalidate the chosen teacher
+      const set = <K extends keyof NewClass>(k: K, v: NewClass[K]) => setNewClass((n) => {
+        const next = { ...n, [k]: v };
+        if (k !== "smeId" && next.smeId
+          && !freeFor(next.topic || course.topics[0], next.day, next.hour, level).some((s) => s.id === next.smeId)) {
+          next.smeId = "";
+        }
+        return next;
+      });
       return (
         <Sheet
           width={560} eyebrow={`${bt.id} · ${course.name}`} title="Add a class"
-          subtitle={`Goes into ${WEEKS.next.label.toLowerCase()} (${WEEKS.next.range}). The draft re-runs and staffs it from the eligible pool.`}
+          subtitle={`Goes into ${WEEKS.next.label.toLowerCase()} (${WEEKS.next.range}). The teacher list only shows people who are actually free.`}
           banner={clash.length
             ? { text: `${bt.id} already has ${clash[0].sub_specialty ?? clash[0].type} at that hour — learners cannot attend both.`, tone: "red" }
             : pool.length ? null
               : { text: `Nobody who teaches ${newClass.topic} is free at ${META.days[newClass.day]} ${String(newClass.hour).padStart(2, "0")}:00. You can still add it and fill it from Work items.`, tone: "amber" }}
-          footerNote={`${bt.id} runs ${bt.per_week} a week · ${rows.filter((r) => r.batch_id === bt.id).length} scheduled so far · ${pool.length} teacher(s) free`}
+          footerNote={`${bt.id} runs ${bt.per_week} a week · ${rows.filter((r) => r.batch_id === bt.id).length} scheduled so far`}
           footer={[
             { label: "Cancel", onClick: () => setSheet(null) },
-            ...(clash.length ? [] : [{ label: "Add class", kind: "go" as const, onClick: () => void addClass() }]),
+            ...(clash.length ? [] : [{
+              label: newClass.smeId ? "Add class" : "Add unfilled class",
+              kind: "go" as const, onClick: () => void addClass(),
+            }]),
           ]}
           onClose={() => setSheet(null)}
         >
@@ -608,6 +912,17 @@ export default function Page() {
               <select className="field w-full" value={newClass.hour} onChange={(e) => set("hour", Number(e.target.value))}>
                 {hours.map((h) => (
                   <option key={h} value={h}>{String(h).padStart(2, "0")}:00 – {String(h + 1).padStart(2, "0")}:00 IST</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label-caps mb-[6px] block">Teacher — {pool.length} free</span>
+              <select className="field w-full" value={newClass.smeId} onChange={(e) => set("smeId", e.target.value)}>
+                <option value="">{pool.length ? "Leave unfilled for now" : "Nobody is free — leave unfilled"}</option>
+                {pool.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} · {s.level} · ★ {s.rating.toFixed(1)}
+                  </option>
                 ))}
               </select>
             </label>
@@ -668,7 +983,7 @@ export default function Page() {
     const readOnly = role !== "coordinator";
 
     if (sheet.kind === "ghost") {
-      const sm = SMES.next.find((s) => s.id === sheet.smeId)!;
+      const sm = rosterFor("next").find((s) => s.id === sheet.smeId)!;
       return (
         <Sheet
           eyebrow={`${r.batch_id} · ${course?.name}`} title={r.sub_specialty ?? META.type_label[r.type]}
@@ -689,9 +1004,9 @@ export default function Page() {
       );
     }
 
-    const cands = sheetCandidates(r, SMES.next);
+    const cands = sheetCandidates(r, rosterFor("next"));
     const showList = !readOnly && (sheet.stage === "pick" || !r.sme_id);
-    const sme = SMES.next.find((s) => s.id === r.sme_id);
+    const sme = rosterFor("next").find((s) => s.id === r.sme_id);
     const mineCount = rows.filter((x) => x.sme_id === r.sme_id).length;
 
     return (
@@ -735,11 +1050,6 @@ export default function Page() {
         ]}
         onClose={() => setSheet(null)}
       >
-        {r.adjusted_from_override && !readOnly && (
-          <div className="rounded-[14px] p-[12px_14px] text-[12.5px]" style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
-            Adjusted from your override — the score for this pairing was nudged on the last re-run.
-          </div>
-        )}
         {sme && (
           <div>
             <SectionLabel>Teacher assigned</SectionLabel>
@@ -774,19 +1084,11 @@ export default function Page() {
             <SectionLabel>{r.sme_id ? "Choose a different teacher" : "Teachers who could take this class"}</SectionLabel>
             <div className="flex flex-col gap-[7px]">
               {cands.map((c) => {
-                const level = SMES.next.find((s) => s.id === c.sme_id)?.level ?? "";
-                const risky = c.blocked || !!c.warn;          // rule breach or fairness breach
-                const isArmed = armed === c.sme_id;
+                const level = rosterFor("next").find((s) => s.id === c.sme_id)?.level ?? "";
                 return (
                   <PersonRow
                     key={c.sme_id} id={c.sme_id} name={c.name}
-                    tone={isArmed ? "active" : "plain"}
-                    meta={isArmed
-                      ? (c.blocked
-                        ? `Breaks a hard rule (${c.warn}). It stays flagged as OVERRIDE RISK${locked
-                          ? " and goes to the SME for approval" : ", and the next re-run cannot keep it"}. Click again to confirm.`
-                        : `${c.warn}. Click again to confirm.`)
-                      : c.score !== null ? `match ${c.score.toFixed(2)} · ${level}` : level}
+                    meta={c.score !== null ? `match ${c.score.toFixed(2)} · ${level}` : level}
                     right={
                       <span className="flex items-center gap-2">
                         {c.warn && (
@@ -799,16 +1101,12 @@ export default function Page() {
                             {c.warn}
                           </span>
                         )}
-                        <span
-                          className="whitespace-nowrap text-[11.5px] font-semibold"
-                          style={{ color: isArmed ? "var(--red-ink)" : "var(--brand-deep)" }}
-                        >
-                          {isArmed ? "Confirm →" : locked ? "Request →" : "Assign →"}
+                        <span className="whitespace-nowrap text-[11.5px] font-semibold" style={{ color: "var(--brand-deep)" }}>
+                          {locked ? "Request →" : "Assign →"}
                         </span>
                       </span>
                     }
-                    // spec: a breach is allowed, but only with an explicit confirmation
-                    onClick={() => (risky && !isArmed ? setArmed(c.sme_id) : assign(r, c.sme_id, c.name, c.blocked))}
+                    onClick={() => assign(r, c.sme_id, c.name, c.blocked)}
                   />
                 );
               })}
@@ -845,7 +1143,6 @@ export default function Page() {
               leaveCount={Object.keys(leave).length} workCount={work.length}
               unfilled={unfilledCount} conflicts={conflictCount}
               advisory={work.length - work.filter((w) => w.blocking).length}
-              llm={run.stats.llm}
               onBatches={() => { setMod("batches"); setSheet(null); }}
               onSmes={() => { setMod("smes"); setSheet(null); }}
               onShowAll={() => { setTab("schedule"); setStatusOff({}); setBatchFilter("all"); }}
@@ -861,7 +1158,6 @@ export default function Page() {
             onStatusToggle={(k: Category) => setStatusOff((s) => ({ ...s, [k]: !s[k] }))}
             onOpenWork={() => setSheet({ kind: "work" })}
             onApproveWeek={approveWeek}
-            onRerun={() => void runNext()}
             onOpen={openClass}
             onOpenOverride={(o) => { setWeek(o.week); setTab("schedule"); setSheet({ kind: "class", sessionId: o.session_id, week: o.week, stage: "info" }); }}
           />
@@ -875,12 +1171,8 @@ export default function Page() {
           approved={approved} selected={selSme} leave={leave} query={smeQuery} filter={smeFilter} vh={vh}
           onQuery={setSmeQuery} onFilter={setSmeFilter} onSelect={setSelSme} onOpen={openClass}
           onGhost={(sessionId) => setSheet({ kind: "ghost", sessionId, week, smeId: selSme })}
-          onToggleLeave={(id) => setLeave((l) => {
-            const n = { ...l };
-            if (n[id]) delete n[id]; else n[id] = "On leave next week";
-            return n;
-          })}
-          onDropOut={(id) => void dropOut(id)}
+          onEditSme={openProfile}
+          onImportSmes={() => { setSmeImp(emptyImport()); setSheet({ kind: "smeImport" }); }}
         />
       );
     }
@@ -890,13 +1182,14 @@ export default function Page() {
           batches={batches} rows={rows} courses={COURSES} meta={META} weeks={WEEKS} week={week}
           weekDates={weekDates} approved={approved} selected={selBatch} vh={vh}
           onSelect={setSelBatch} onOpen={openClass} onNewBatch={() => setSheet({ kind: "newBatch" })} onNewClass={openNewClass}
+          onImport={() => { setImp(emptyImport()); setSheet({ kind: "import" }); }}
         />
       );
     }
     return (
       <MyWeek
         role={role === "student" ? "student" : "sme"} me={meNow} myBatch={batches.find((b) => b.id === META.my_batch)}
-        rows={rows} smes={SMES.next} courses={COURSES} meta={META} weeks={WEEKS} week={week} weekDates={weekDates}
+        rows={rows} smes={rosterFor("next")} courses={COURSES} meta={META} weeks={WEEKS} week={week} weekDates={weekDates}
         approved={approved} availOff={availOff} preferred={preferred} vh={vh}
         onAvail={(k) => void toggleAvail(k)}
         onPreferred={setPreferred} onOpen={openClass}
@@ -907,7 +1200,7 @@ export default function Page() {
           else { n[META.me] = "Leave requested for next week (7–12 Sep)"; say("Leave requested for next week — ops notified."); }
           return n;
         })}
-        pending={pending} onResolve={resolvePending}
+        onEditProfile={() => openProfile(META.me)}
       />
     );
   };
@@ -916,11 +1209,14 @@ export default function Page() {
     <div className="flex h-screen items-stretch overflow-hidden" style={{ background: "var(--page)" }}>
       <Sidebar
         role={role} mod={mod}
-        badges={{ dashboard: work.length || undefined, myweek: pending.length || undefined }}
+        pinned={navPinned} onPinned={setNavPinned}
         onRole={(r) => { setRole(r); setMod(ROLE_MODULES[r][0]); setSheet(null); }}
         onMod={(m) => { setMod(m); setSheet(null); }}
       />
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden" style={{ marginLeft: 74 }}>
+      <main
+        className="flex min-w-0 flex-1 flex-col overflow-hidden"
+        style={{ marginLeft: navPinned ? 0 : 74, transition: "margin-left .34s cubic-bezier(.32,.72,0,1)" }}
+      >
         <div
           className="flex shrink-0 flex-wrap items-end gap-[14px] p-[18px_26px_14px]"
           style={{
@@ -948,7 +1244,7 @@ export default function Page() {
                 </span>
               ) : isPublished ? (
                 <span className="rounded-[9px] px-[10px] py-[5px] text-[11.5px] font-semibold" style={{ background: "var(--green-tint)", color: "var(--green-ink)" }}>
-                  ✓ Published
+                  ✓ Approved
                 </span>
               ) : null}
             </div>
@@ -959,7 +1255,6 @@ export default function Page() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-[14px] overflow-auto p-[14px_26px_18px]">
-          {run && <LlmBanner llm={run.stats.llm} />}
           {showModule()}
         </div>
       </main>

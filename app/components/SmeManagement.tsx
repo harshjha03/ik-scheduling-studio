@@ -1,7 +1,7 @@
 "use client";
 import type { Course, DraftRow, Meta, SME, WeekKey, WeekMeta } from "@/lib/types";
 import type { SmeFilter } from "@/lib/view";
-import { accentBorder, avatarBg, fitsFor, initials, istParts, isAvailable, poolMean, smeMatches, smeWeekStats } from "@/lib/view";
+import { accentBorder, avatarBg, fitsFor, initials, istParts, isAvailable, smeMatches, smeWeekStats } from "@/lib/view";
 import WeekCalendar, { type GhostRow } from "./WeekCalendar";
 
 interface Props {
@@ -23,11 +23,10 @@ interface Props {
   onSelect: (id: string) => void;
   onOpen: (sessionId: string) => void;
   onGhost: (sessionId: string) => void;
-  onToggleLeave: (smeId: string) => void;
-  onDropOut: (smeId: string) => void;
+  onEditSme: (smeId: string) => void;
+  onImportSmes: () => void;
 }
 
-const LEVEL_PCT: Record<string, number> = { beginner: 30, intermediate: 62, advanced: 100 };
 const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
   beginner: { bg: "var(--green-tint)", fg: "var(--green-ink)" },
   intermediate: { bg: "var(--brand-tint)", fg: "var(--brand-deep)" },
@@ -36,7 +35,7 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 
 export default function SmeManagement({
   smes, rows, courses, meta, weeks, week, weekDates, approved, selected, leave, query, filter, vh,
-  onQuery, onFilter, onSelect, onOpen, onGhost, onToggleLeave, onDropOut,
+  onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onImportSmes,
 }: Props) {
   const shown = smes.filter((s) => smeMatches(s, rows, query, filter, leave));
   const sel = smes.find((s) => s.id === selected) ?? shown[0] ?? smes[0];
@@ -93,25 +92,39 @@ export default function SmeManagement({
               </button>
             ))}
           </div>
+          <button
+            className="ml-auto inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[11px] bg-white p-[7px_13px_7px_8px] text-[12px] font-semibold"
+            style={{ border: "1px solid #dfe7f2", color: "var(--ink)", boxShadow: "0 1px 2px rgba(54,67,87,0.05)" }}
+            onClick={onImportSmes}
+            title="Download the SME template, fill it in Excel, upload it back"
+          >
+            <span className="flex size-[22px] shrink-0 items-center justify-center rounded-[7px]" style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M4 17.5V20h16v-2.5" />
+              </svg>
+            </span>
+            <span>Import SMEs</span>
+          </button>
         </div>
         <div className="min-h-[152px] flex-1 overflow-auto">
-          <table className="w-full min-w-[1000px] border-collapse">
+          <table className="w-full min-w-[1040px] border-collapse">
             <thead>
               <tr className="label-caps text-left">
                 <th className="p-[9px_20px] font-semibold">SME</th>
                 <th className="p-[9px_10px] font-semibold">Skills / topics</th>
                 <th className="w-[150px] p-[9px_10px] font-semibold">Level</th>
                 <th className="w-[80px] p-[9px_10px] font-semibold">Rating</th>
-                <th className="w-[172px] p-[9px_10px] font-semibold">This week</th>
-                <th className="w-[196px] p-[9px_20px] font-semibold">Leave</th>
+                <th className="w-[158px] p-[9px_10px] font-semibold">This week</th>
+                <th className="w-[150px] p-[9px_10px] font-semibold">Leave</th>
+                <th className="w-[74px] p-[9px_20px] font-semibold">Profile</th>
               </tr>
             </thead>
             <tbody>
               {shown.map((s) => {
                 const st = smeWeekStats(s, rows);
                 const on = s.id === sel.id;
-                const mean = poolMean(smes, s.subjects[0], rows);
                 const fits = fitsFor(s, rows).length;
+                const nextLevel = meta.levels[meta.levels.indexOf(s.level) + 1];
                 const td = { padding: "11px 10px", verticalAlign: "top" as const, borderTop: "0.5px solid rgba(16,26,51,0.06)" };
                 const chip = LEVEL_CHIP[s.level];
                 return (
@@ -134,6 +147,9 @@ export default function SmeManagement({
                           <span className="mt-px block whitespace-nowrap text-[10.5px]" style={{ color: "var(--muted-3)" }}>
                             {s.id} · {s.subjects.join(" + ")} · {s.city}
                           </span>
+                          <span className="mt-px block overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px]" style={{ color: "#8892a4" }}>
+                            {s.email ?? "—"}
+                          </span>
                         </span>
                       </div>
                     </td>
@@ -146,11 +162,8 @@ export default function SmeManagement({
                     </td>
                     <td style={td}>
                       <span className="rounded-[8px] px-2 py-[3px] text-[10px] font-bold capitalize" style={{ background: chip.bg, color: chip.fg }}>{s.level}</span>
-                      <div className="relative mt-[7px] h-[5px] overflow-hidden rounded-[3px]" style={{ background: "var(--line-2)" }}>
-                        <span className="absolute inset-y-0 left-0 rounded-[3px]" style={{ width: `${LEVEL_PCT[s.level]}%`, background: "var(--brand-bright)" }} />
-                      </div>
-                      <div className="mt-[5px] text-[10.5px] leading-[1.35]" style={{ color: "var(--muted)" }}>
-                        {s.level === "advanced" ? "top level · mocks & advanced batches" : `${s.to_upgrade} classes to next level`}
+                      <div className="mt-[6px] text-[10.5px] leading-[1.35]" style={{ color: "var(--muted)" }}>
+                        {s.level === "advanced" ? "top level · mocks & advanced batches" : `${s.to_upgrade} classes to ${nextLevel}`}
                       </div>
                     </td>
                     <td style={td}>
@@ -170,10 +183,10 @@ export default function SmeManagement({
                       >
                         {fits ? `Can fill ${fits} open class${fits === 1 ? "" : "es"} →`
                           : st.over ? `${st.assigned - s.preferred} over their preference`
-                            : `${s.preferred - st.assigned} slot${s.preferred - st.assigned === 1 ? "" : "s"} of headroom · 4-wk ${st.load4w} vs ${mean.toFixed(1)}`}
+                            : `${s.preferred - st.assigned} slot${s.preferred - st.assigned === 1 ? "" : "s"} of headroom`}
                       </div>
                     </td>
-                    <td style={{ ...td, paddingRight: 20 }} onClick={(e) => e.stopPropagation()}>
+                    <td style={td}>
                       <span
                         className="inline-block rounded-[9px] px-[9px] py-[5px] text-[10.5px] font-semibold leading-[1.35]"
                         style={leave[s.id]
@@ -182,23 +195,18 @@ export default function SmeManagement({
                       >
                         {leave[s.id] ?? "Available"}
                       </span>
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        <button className="btn btn-sm" onClick={() => onToggleLeave(s.id)}>
-                          {leave[s.id] ? "Clear leave" : "Mark on leave"}
-                        </button>
-                        {leave[s.id] && (
-                          <button className="btn btn-sm" onClick={() => onDropOut(s.id)} title="Re-run the draft with this SME unavailable all week">
-                            Re-run without them
-                          </button>
-                        )}
-                      </div>
+                    </td>
+                    <td style={{ ...td, paddingRight: 20, textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+                      <button className="btn btn-sm" onClick={() => onEditSme(s.id)} title="Edit profile basics">
+                        Edit
+                      </button>
                     </td>
                   </tr>
                 );
               })}
               {!shown.length && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-[12.5px]" style={{ color: "var(--muted)" }}>
+                  <td colSpan={7} className="p-8 text-center text-[12.5px]" style={{ color: "var(--muted)" }}>
                     Nobody matches that search or filter.
                   </td>
                 </tr>

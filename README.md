@@ -112,17 +112,45 @@ vercel --prod
 ```
 
 `vercel.json` pins `framework: nextjs`, rewrites `/api/(.*)` → `/api/index` so the single FastAPI
-app in `api/index.py` handles every `/api/*` route, and sets `maxDuration: 60` for the LLM call.
+app in `api/index.py` handles every `/api/*` route, and sets `maxDuration: 120` for the LLM call.
 Python deps come from `requirements.txt`. Verify: `curl -X POST https://<app>/api/run -d @payload.json`.
 
-## Statelessness (read this)
+**What you have to provision**, in the order it stops mattering if you skip it:
 
-Vercel Python functions are stateless with no durable filesystem and there is no database. The
-**frontend is the source of truth**: it loads the seed JSON, holds the working state (draft,
+| # | Connection | Env vars | Without it |
+|---|---|---|---|
+| 1 | **Postgres** (Neon / Supabase / RDS) | `DATABASE_URL` | *Required on Vercel.* Saved weeks and calendar event ids vanish on every cold start; re-publishing duplicates events. |
+| 2 | **Google Cloud project** with the Calendar API enabled, plus one identity to publish as — a service account (share the calendar with it, "Make changes to events") or an OAuth Desktop client consented by a person | `GOOGLE_CALENDAR_ID` + either `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_OAUTH_JSON` (raw or base64) | Calendar publish reports `simulated`; nothing is written. |
+| 2b | Whichever identity you skipped — see the table under *Publishing* | `GOOGLE_OAUTH_JSON`, or `GOOGLE_IMPERSONATE` for Workspace delegation | Events are written but SMEs are not invited; they have to subscribe to the calendar. |
+| 3 | **Resend** account with a verified sending domain | `RESEND_API_KEY`, `MAIL_FROM` | E-mail digests report `simulated`. |
+| 4 | **Twilio** account + a number you own | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | SMS reports `simulated`. |
+| 5 | **Staging guard** while the roster is still seed data | `PUBLISH_REDIRECT_TO`, `PUBLISH_REDIRECT_SMS_TO` | Live sends go to `.example` addresses and placeholder numbers — bounces against your provider's reputation. |
+| 6 | **LLM key** (Anthropic or any OpenAI-compatible) | see the table above | Stage C is skipped; queued rows fall back to the Stage-B score with an `LLM_FALLBACK` flag. |
+
+Nothing here is a hard dependency of the app: every missing piece degrades to `simulated` and says
+so in the UI. `GET /api/integrations` is the single source of truth for what is actually wired.
+
+## State: what lives where (read this)
+
+The **pipeline** is stateless — the frontend loads the seed JSON, holds the working state (draft,
 decisions, override log, simulated drop-outs) and passes what the API needs on every call.
-`GET /api/draft` only returns the last run from a *warm* instance's memory and otherwise 404s
-with `{"detail": "no cached draft — POST /api/run"}`; it exists to satisfy the
-trigger/fetch/approve API shape, not as storage.
+`GET /api/draft` only returns the last run from a *warm* instance's memory and otherwise 404s;
+it exists to satisfy the trigger/fetch/approve API shape, not as storage.
+
+Three things outlive a request and go to a database (`engine/store.py`): the **saved week**
+(so a refresh doesn't lose the coordinator's work), the **publish log**, and the **calendar event
+ids we own** (so re-publishing updates events instead of duplicating them).
+
+| `DATABASE_URL` | Driver | Location | Durable |
+|---|---|---|---|
+| unset | SQLite | `IK_DB_PATH`, default `.data/ik.db` | no — local dev only |
+| set | Postgres (Neon/Supabase/RDS) | that server | yes |
+
+**On Vercel you must set `DATABASE_URL`.** Function filesystems are ephemeral: with SQLite, every
+cold start silently loses the saved week and the event ids, and the next publish duplicates every
+calendar event. `GET /api/integrations` reports `storage.durable` so the running app tells you which
+one it is. Plain SQL, two placeholder styles, no ORM and no migration step — the schema is three
+`CREATE TABLE IF NOT EXISTS` statements.
 
 ## API
 
@@ -134,6 +162,63 @@ trigger/fetch/approve API shape, not as storage.
 - `POST /api/approvals` — `{draft, decisions:[{session_id, action: approve|override, override_sme_id?}]}`
   → `{final_schedule, override_log, export_rows}`. An override outside the row's Stage-A
   candidates is accepted **with** a `RULE_OVERRIDE_RISK` flag naming the rule it breaks — never silently.
+- `GET /api/health` — LLM provider/model actually in use.
+- `GET /api/integrations` — `{channels, storage, llm}`: what is wired up right now. The publish
+  sheet labels each channel **live** or **simulated** from this, so a mock never looks like a send.
+- `POST /api/publish` — `{week, week_label, channel: cal|email|sms, audience: sme|stu, rows, smes, batches}`
+  → `{status: sent|simulated|skipped|error, detail, count, live}`. Sends where that channel has
+  credentials, reports `simulated` where it doesn't, records the outcome either way.
+- `GET /api/publish/log?week=` — what was sent, when, and whether it was live.
+- `GET|POST /api/schedule` — save/load the week (`{week, draft, ...}`); `null` when nothing is saved.
+
+## Publishing: how a week reaches people
+
+`engine/channels.py`, one function per channel, each live only when its credentials are present.
+
+- **Google Calendar** — Calendar v3, one event per class. The event id is stored per
+  `(session_id, calendar_id)`, so a re-publish **PUT**s the event it already owns rather than
+  creating a duplicate; if the event was deleted in Google (404/410) it is re-created. Students
+  publish to their batch's `calendar_id` when the batch names one, otherwise to the shared
+  `GOOGLE_CALENDAR_ID`.
+
+  **Whether teachers get invited depends on which identity publishes**, and that is a Google policy
+  boundary, not a setting in this code:
+
+  | Identity | Env | Attendees |
+  |---|---|---|
+  | A person | `GOOGLE_OAUTH_JSON` | **Yes** — the class lands on the teacher's own calendar with nothing to click. Works on a plain gmail.com account. Events show that human as organiser. |
+  | A service account | `GOOGLE_SERVICE_ACCOUNT_JSON` | **No** — `403 forbiddenForServiceAccounts`. The teacher is named in the description; people subscribe to the calendar. |
+  | A delegated service account | `+ GOOGLE_IMPERSONATE` | Yes, but needs Google Workspace domain-wide delegation, and only covers addresses in that domain. |
+
+  `GOOGLE_OAUTH_JSON` wins when both are set, and `/api/integrations` reports which one is live
+  ("user account, invites teachers" vs "service account, writes events only"). Addresses on reserved
+  domains (`.example`, `.invalid`, `.test`) are never invited — the seed roster is placeholders, and
+  inviting it would fire off a bounce per class.
+- **E-mail** — Resend, one HTML digest per recipient (SMEs individually, batches via
+  `contact_email`).
+- **SMS** — Twilio, one short message per number. Batches have no group number, so student SMS
+  honestly reports "no recipients".
+
+One bad row never sinks the batch: failures are counted per row and reported in `detail`.
+
+> **Before the first live send**, set `PUBLISH_REDIRECT_TO` / `PUBLISH_REDIRECT_SMS_TO`. The seed
+> roster is `.example` addresses and placeholder numbers; the redirect sends one message to an inbox
+> you own instead of bouncing dozens off a real provider.
+
+> **Running the flow suite once anything is live.** It runs the whole product: it publishes every
+> channel/audience leaf for a week *and* saves the result. Against a configured API that means real
+> calendar events; against the production database it overwrites the saved week and then reads it
+> back on the next run, so the assertions start depending on what the last run left behind. Start the
+> API isolated from both:
+>
+> ```bash
+> DATABASE_URL= IK_DB_PATH=/tmp/ik-flow-test.db PUBLISH_DISABLED=1 npm run dev:api
+> ```
+>
+> `PUBLISH_DISABLED` forces every channel to simulate whatever the credentials say. The suite checks
+> `/api/integrations` before launching Chrome and exits 2 if any channel is live or storage is
+> durable, so this isn't something you can forget. `pytest` is unaffected — it never touches the
+> network or a real database.
 
 ## Pipeline
 

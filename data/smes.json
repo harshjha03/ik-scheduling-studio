@@ -2,6 +2,8 @@
  {
   "id": "T01",
   "name": "Ananya Iyer",
+  "email": "ananya.iyer@ik.example",
+  "phone": "+919900000001",
   "subject": "DSA",
   "subjects": [
    "DSA"
@@ -129,6 +131,8 @@
  {
   "id": "T02",
   "name": "Rohan Mehta",
+  "email": "rohan.mehta@ik.example",
+  "phone": "+919900000002",
   "subject": "DSA",
   "subjects": [
    "DSA"
@@ -245,6 +249,8 @@
  {
   "id": "T03",
   "name": "Kavya Nair",
+  "email": "kavya.nair@ik.example",
+  "phone": "+919900000003",
   "subject": "DSA",
   "subjects": [
    "DSA"
@@ -361,6 +367,8 @@
  {
   "id": "T04",
   "name": "Arjun Sharma",
+  "email": "arjun.sharma@ik.example",
+  "phone": "+919900000004",
   "subject": "DSA",
   "subjects": [
    "DSA"
@@ -483,6 +491,8 @@
  {
   "id": "T05",
   "name": "Neha Kulkarni",
+  "email": "neha.kulkarni@ik.example",
+  "phone": "+919900000005",
   "subject": "DSA",
   "subjects": [
    "DSA"
@@ -590,6 +600,8 @@
  {
   "id": "T06",
   "name": "Vikram Rao",
+  "email": "vikram.rao@ik.example",
+  "phone": "+919900000006",
   "subject": "DSA",
   "subjects": [
    "DSA"
@@ -688,6 +700,8 @@
  {
   "id": "T07",
   "name": "Priya Menon",
+  "email": "priya.menon@ik.example",
+  "phone": "+919900000007",
   "subject": "ML",
   "subjects": [
    "ML"
@@ -800,6 +814,8 @@
  {
   "id": "T08",
   "name": "Sameer Khan",
+  "email": "sameer.khan@ik.example",
+  "phone": "+919900000008",
   "subject": "ML",
   "subjects": [
    "ML"
@@ -916,6 +932,8 @@
  {
   "id": "T09",
   "name": "Divya Pillai",
+  "email": "divya.pillai@ik.example",
+  "phone": "+919900000009",
   "subject": "ML",
   "subjects": [
    "ML"
@@ -1028,6 +1046,8 @@
  {
   "id": "T10",
   "name": "Aditya Verma",
+  "email": "aditya.verma@ik.example",
+  "phone": "+919900000010",
   "subject": "AI",
   "subjects": [
    "AI"
@@ -1140,6 +1160,8 @@
  {
   "id": "T11",
   "name": "Meera Joshi",
+  "email": "meera.joshi@ik.example",
+  "phone": "+919900000011",
   "subject": "AI",
   "subjects": [
    "AI"
@@ -1244,6 +1266,8 @@
  {
   "id": "T12",
   "name": "Karan Bose",
+  "email": "karan.bose@ik.example",
+  "phone": "+919900000012",
   "subject": "AI",
   "subjects": [
    "AI"
@@ -1362,6 +1386,8 @@
  {
   "id": "T13",
   "name": "Sneha Reddy",
+  "email": "sneha.reddy@ik.example",
+  "phone": "+919900000013",
   "subject": "PM",
   "subjects": [
    "PM"
@@ -1478,6 +1504,8 @@
  {
   "id": "T14",
   "name": "Rahul Desai",
+  "email": "tushartimes112@gmail.com",
+  "phone": "+919900000014",
   "subject": "PM",
   "subjects": [
    "PM",
@@ -1601,6 +1629,8 @@
  {
   "id": "T15",
   "name": "Ishita Ghosh",
+  "email": "ishita.ghosh@ik.example",
+  "phone": "+919900000015",
   "subject": "PM",
   "subjects": [
    "PM"
@@ -1713,6 +1743,8 @@
  {
   "id": "T16",
   "name": "Farhan Sheikh",
+  "email": "farhan.sheikh@ik.example",
+  "phone": "+919900000016",
   "subject": "ML",
   "subjects": [
    "ML",

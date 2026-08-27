@@ -30,7 +30,6 @@ interface Props {
   onStatusToggle: (k: Category) => void;
   onOpenWork: () => void;
   onApproveWeek: () => void;
-  onRerun: () => void;
   onOpen: (sessionId: string) => void;
   onOpenOverride: (o: OverrideEvent) => void;
 }
@@ -38,7 +37,7 @@ interface Props {
 export default function Dashboard({
   rows, allRows, batches, courses, meta, weeks, week, weekDates, tab, approved, changed, batchFilter, statusOff,
   workCount, published, overrides, loading, vh, smeName, onTab, onBatchFilter, onStatusToggle,
-  onOpenWork, onApproveWeek, onRerun, onOpen, onOpenOverride,
+  onOpenWork, onApproveWeek, onOpen, onOpenOverride,
 }: Props) {
   const locked = weeks[week].locked;
   const unfilled = allRows.filter((r) => !r.sme_id).length;
@@ -65,21 +64,8 @@ export default function Dashboard({
               {unfilled} class{unfilled === 1 ? "" : "es"} still without a teacher
             </span>
           )}
-          {!locked && (
-            <button className="btn btn-sm" onClick={onRerun} disabled={loading} title="Re-run the matching pipeline with your overrides applied">
-              {loading ? "Running…" : "Re-run draft"}
-            </button>
-          )}
-          {!locked && (
-            <span
-              className="rounded-[9px] px-[10px] py-[5px] text-[11.5px]"
-              style={changed.size
-                ? { background: "var(--amber-tint)", color: "var(--amber-ink)", fontWeight: 650 }
-                : { color: "var(--muted)" }}
-            >
-              {changed.size} rows changed
-            </span>
-          )}
+          {/* No manual re-run control: the design has none, and every action that invalidates the
+              draft (override, added class, drop-out, availability change) re-runs it on its own. */}
           <button className="btn btn-soft flex items-center gap-2" onClick={onOpenWork} title="Unfilled classes, conflicts and workload flags for this week">
             <span>Work items</span>
             <span

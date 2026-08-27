@@ -11,13 +11,19 @@ interface Props {
   onToggleChannel: (ids: LeafId[], turnOn: boolean) => void;
 }
 
-const PILL: Record<SendState | "ready", { background: string; color: string }> = {
+const PILL: Record<SendState, { background: string; color: string }> = {
   sent: { background: "var(--green-tint)", color: "var(--green-ink)" },
+  simulated: { background: "#f1f5fa", color: "var(--muted-3)" },
+  skipped: { background: "var(--sand-tint)", color: "var(--sand-ink)" },
+  error: { background: "var(--red-tint)", color: "var(--red-ink)" },
   sending: { background: "var(--amber-tint)", color: "var(--amber-ink)" },
   ready: { background: "var(--brand-tint)", color: "var(--brand-deep)" },
   idle: { background: "#f1f5fa", color: "var(--muted-3)" },
 };
-const LABEL: Record<SendState | "ready", string> = { sent: "Sent ✓", sending: "Sending…", ready: "Ready", idle: "Skipped" };
+const LABEL: Record<SendState, string> = {
+  sent: "Sent ✓", simulated: "Simulated", skipped: "No recipients", error: "Failed",
+  sending: "Sending…", ready: "Ready", idle: "Skipped",
+};
 
 function tickStyle(state: "all" | "some" | "none", leaf: boolean, locked: boolean) {
   const size = leaf ? 18 : 20;
@@ -41,14 +47,15 @@ export default function PublishSheet({ leaves, selected, status, locked, onToggl
         const anySending = mine.some((l) => status[l.id] === "sending");
         const allSent = mine.every((l) => status[l.id] === "sent");
         const someSent = mine.some((l) => status[l.id] === "sent");
-        const chState: SendState | "ready" = allSent || someSent ? "sent" : anySending ? "sending" : onCount ? "ready" : "idle";
+        const anyDone = mine.some((l) => ["sent", "simulated", "skipped", "error"].includes(status[l.id]));
+        const chState: SendState = allSent || someSent ? "sent" : anySending ? "sending" : onCount ? "ready" : "idle";
         return (
           <div
             key={ch.key}
             className="rounded-[16px] p-[13px_15px]"
             style={{
               border: `1px solid ${allSent ? "var(--green-line)" : onCount ? "var(--brand-line)" : "var(--line)"}`,
-              background: allSent ? "#f6fbf8" : onCount ? "var(--brand-soft)" : "#fff",
+              background: allSent ? "#f6fbf8" : anyDone ? "#fbfcfe" : onCount ? "var(--brand-soft)" : "#fff",
             }}
           >
             <div className="flex items-start gap-[11px]">
@@ -62,7 +69,9 @@ export default function PublishSheet({ leaves, selected, status, locked, onToggl
               </button>
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] font-bold leading-[1.3]">{ch.title}</span>
-                <span className="mt-[2px] block text-[11.5px] leading-[1.45]" style={{ color: "var(--muted)" }}>{ch.sub}</span>
+                <span className="mt-[2px] block text-[11.5px] leading-[1.45]" style={{ color: "var(--muted)" }}>
+                  {ch.sub}
+                </span>
               </span>
               <span className="shrink-0 rounded-[9px] px-[9px] py-[3px] text-[10.5px] font-bold" style={{ ...PILL[chState], letterSpacing: "0.02em" }}>
                 {LABEL[chState]}
@@ -71,7 +80,7 @@ export default function PublishSheet({ leaves, selected, status, locked, onToggl
             <div className="mt-[10px] flex flex-col gap-[5px] pl-[31px]">
               {mine.map((l) => {
                 const raw = status[l.id] ?? "idle";
-                const leafState: SendState | "ready" = raw === "idle" ? (selected[l.id] ? "ready" : "idle") : raw;
+                const leafState: SendState = raw === "idle" ? (selected[l.id] ? "ready" : "idle") : raw;
                 return (
                   <div
                     key={l.id}

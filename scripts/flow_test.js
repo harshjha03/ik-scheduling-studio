@@ -153,8 +153,37 @@ function ok(cond, msg, extra) {
   else { fail++; results.push(msg); console.log("  FAIL " + msg + (extra !== undefined ? "  << " + JSON.stringify(extra) : "")); }
 }
 
+const ISOLATED = "DATABASE_URL= IK_DB_PATH=/tmp/ik-flow-test.db PUBLISH_DISABLED=1 npm run dev:api";
+
+/** This suite runs the whole product: it publishes every channel/audience leaf for a week and saves
+ *  the result. Against a configured API that is real mail and real calendar events; against the
+ *  production database it both overwrites the saved week and reads it back on the next run, so the
+ *  assertions depend on whatever was left behind. Refuse both rather than find out afterwards. */
+async function refuseUnlessIsolated() {
+  const res = await fetch("http://localhost:3000/api/integrations").catch(() => null);
+  if (!res || !res.ok) return;                    // API down — the suite fails on its own, loudly
+  const { channels, storage } = await res.json();
+  const live = Object.entries(channels).filter(([, c]) => c.live).map(([k]) => k);
+  const why = [
+    live.length && `${live.join(", ")} ${live.length > 1 ? "are" : "is"} live — the publish flow would send for real`,
+    storage.durable && `storage is the ${storage.driver} database — the suite would overwrite the saved week`,
+  ].filter(Boolean);
+  if (why.length) {
+    console.error(`\nREFUSING TO RUN:\n` + why.map((w) => `  - ${w}`).join("\n") +
+      `\n\nRestart the API isolated from production:\n\n  ${ISOLATED}\n`);
+    process.exit(2);
+  }
+  // Start from an empty store. The suite saves the week it drafts, so without this the next run
+  // restores the previous run's schedule and assertions drift. Deleting the file under the running
+  // API is safe: the store re-creates its schema on the next query.
+  for (const f of [storage.location, `${storage.location}-wal`, `${storage.location}-shm`]) {
+    try { fs.unlinkSync(f); } catch { /* already gone */ }
+  }
+}
+
 async function main() {
   const only = process.argv[2];
+  await refuseUnlessIsolated();
   const b = await launch("http://localhost:3000/");
   const ev = (code) => b.evaluate(H + code);
   const wait = (code, label, timeout = 25000) => b.waitFor(H + code, { label, timeout });
@@ -186,7 +215,7 @@ async function main() {
     if (!only || only === "student") await student(ev, wait, settle);
     if (!only || only === "features") { await b.goto("http://localhost:3000/");
       await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
-      await features(ev, wait, settle); }
+      await features(ev, wait, settle, b); }
     // React warnings (mixed style shorthands, key errors, bad state updates) must not pile up unseen
     console.log("\n=== console ===");
     const noise = /Download the React DevTools|\[HMR\]|favicon\.ico/i;
@@ -226,7 +255,7 @@ async function coordinator(ev, wait, settle, dl) {
   await sleep(500);
   const s2 = await ev(`return { live: has("Live week"), rerun: !!byPart("button", "Re-run draft"), cards: cards().length, unfilled: cardText().filter(t => t.includes("Unfilled")).length }`);
   ok(s2.live, "settled week is labelled 'Live week'");
-  ok(!s2.rerun, "settled week cannot be re-run");
+  ok(!s2.rerun, "no manual re-run control anywhere — the design has none, overrides re-draft on their own");
   ok(s2.cards === 41 && s2.unfilled === 0, `settled week is fully staffed (${s2.cards} cards, ${s2.unfilled} unfilled)`);
   await ev(`return clickPart(".tab", "Next week")`);
   await sleep(400);
@@ -266,33 +295,23 @@ async function coordinator(ev, wait, settle, dl) {
   ok(/Unfilled/.test(sh.text) && /No eligible SME/.test(sh.text), "unfilled sheet explains why in plain language", sh.text?.slice(0, 160));
   ok(/teachers who could take this class|nobody else is eligible/i.test(sh.text), "unfilled sheet offers the fix", sh.text?.slice(0, 200));
 
-  console.log("\n-- C5 fill an unfilled class from the sheet (rule breach needs confirming) --");
-  const armed = await ev(`
+  console.log("\n-- C5 fill an unfilled class from the sheet --");
+  const filled = await ev(`
     const before = cardText().filter((t) => t.includes("Unfilled")).length;
     const rows = all('[role="dialog"] button').filter((x) => /Assign →|Request →/.test(norm(x.textContent)));
     if (!rows.length) return { skipped: true, before };
     const risky = rows.find((x) => /busy with|below batch level|outside working hours|does not carry|above fairness/.test(norm(x.innerText))) || rows[0];
     const wasRisky = /busy with|below batch level|outside working hours|does not carry|above fairness/.test(norm(risky.innerText));
-    risky.click(); await sleep(450);
-    const t = sheetText() || "";
-    return { before, wasRisky, confirmShown: t.includes("Confirm →"),
-             warned: /click again to confirm/i.test(t), stillOpen: !!sheet(),
-             unfilledNow: cardText().filter((x) => x.includes("Unfilled")).length };`);
-  if (armed.skipped) {
+    risky.click(); await sleep(700);
+    return { before, wasRisky, toast: toast(), sheetClosed: !sheet(),
+             after: cardText().filter((x) => x.includes("Unfilled")).length };`);
+  if (filled.skipped) {
     ok(true, "no teacher offered for that slot — the sheet said so");
     await ev(`if (sheet()) byPart('[role="dialog"] button', "Close").click(); return true;`);
   } else {
-    ok(!armed.wasRisky || armed.confirmShown, "a rule-breaking pick asks for confirmation instead of assigning", armed);
-    ok(!armed.wasRisky || armed.warned, "and spells out the consequence before you commit", armed);
-    ok(!armed.wasRisky || armed.unfilledNow === armed.before, "nothing is assigned until you confirm", armed);
-    const confirmed = await ev(`
-      const row = all('[role="dialog"] button').find((x) => norm(x.textContent).includes("Confirm →"))
-               || all('[role="dialog"] button').find((x) => /Assign →/.test(norm(x.textContent)));
-      row.click(); await sleep(700);
-      return { after: cardText().filter((t) => t.includes("Unfilled")).length, toast: toast(), sheetClosed: !sheet() };`);
-    ok(confirmed.after === armed.before - 1, `confirming assigns the teacher (${armed.before} -> ${confirmed.after} unfilled)`);
-    ok(confirmed.sheetClosed, "sheet closes after assigning");
-    ok(/assigned to/.test(confirmed.toast || ""), `toast confirms: ${confirmed.toast}`);
+    ok(filled.after === filled.before - 1, `one click assigns the teacher (${filled.before} -> ${filled.after} unfilled)`);
+    ok(filled.sheetClosed, "sheet closes after assigning");
+    ok(/assigned to/.test(filled.toast || ""), `toast confirms: ${filled.toast}`);
   }
 
   console.log("\n-- C6 override log --");
@@ -303,25 +322,20 @@ async function coordinator(ev, wait, settle, dl) {
   ok(log.entries >= 1, `override is recorded in the log (${log.entries} entries)`);
   ok(log.pending, "log says the score nudge is pending the next re-run");
 
-  console.log("\n-- C7 re-run applies the override --");
-  await ev(`clickPart(".tab", "Schedule"); return true;`);
-  await sleep(400);
-  await ev(`clickPart("button", "Re-run draft"); return true;`);
-  await settle();
+  console.log("-- C7 the override is applied and logged --");
+  // There is no manual re-run control (the design has none), so an override is applied immediately
+  // and the next natural draft re-scores the pairing. The Stage E maths itself is covered by pytest
+  // (stage_e_adjustments); what matters here is that the UI applies it and says what it did.
   await ev(`clickPart(".tab", "Overrides"); return true;`);
-  // the log line only updates once the run resolves — poll rather than guess a delay
-  await wait(`const t = body();
-    return (t.includes("re-run changed") || t.includes("no other row changed") || t.includes("could not keep")) || null;`,
-    "override log to report the re-run", 40000).catch(() => null);
+  await sleep(500);
   const after = await ev(`
     const t = body();
-    return { changed: (t.match(/(\\d+) rows changed/) || [])[1],
-             reran: t.includes("re-run changed") || t.includes("no other row changed") || t.includes("could not keep"),
-             reverted: t.includes("could not keep"), pending: t.includes("pending re-run") };`);
-  ok(after.reran, "override log reports what the re-run did with the pick");
-  ok(true, `  (log outcome: ${after.reverted ? "pick reverted — breaks a hard rule, stated explicitly" : "pick kept"})`);
+    return { logged: /teacher change|assigned/i.test(t),
+             scored: t.includes("next draft scores this pairing"),
+             risk: t.includes("OVERRIDE RISK") || t.includes("hard rule") };`);
+  ok(after.logged, "the override is written to the override log");
+  ok(after.scored || after.risk, "and the log states what the next draft will do with it", after);
   await ev(`clickPart(".tab", "Schedule"); return true;`);
-  ok(after.changed !== undefined, `diff indicator present (${after.changed} rows changed)`);
 
   console.log("\n-- C8 work items --");
   const work = await ev(`
@@ -341,7 +355,7 @@ async function coordinator(ev, wait, settle, dl) {
     const disabled = !!(btn && btn.disabled);
     if (btn && !disabled) { btn.click(); await sleep(700); }
     return { unfilled, disabled, note: /still without a teacher/.test(body()), sheet: !!sheet(),
-             toast: toast(), pill: has("Published") };`);
+             toast: toast(), pill: has("✓ Approved") };`);
   if (appr.unfilled > 0) {
     ok(appr.disabled, `approve is disabled while ${appr.unfilled} class(es) are unfilled`, appr);
     ok(appr.note, "and the header says why", appr);
@@ -376,28 +390,17 @@ async function coordinator(ev, wait, settle, dl) {
   const smes = await ev(`
     const nav = all("nav button").find((x) => /SME management/.test(x.title || ""));
     nav.click(); await sleep(700);
+    const row0 = all("tbody tr")[0];
     return { h1: norm(document.querySelector("h1").textContent), rows: all("tbody tr").length,
-             hasCal: has("Availability & assignment history"), legend: has("free working hour") };`);
+             hasCal: has("Availability & assignment history"), legend: has("free working hour"),
+             email: /@ik\\.example/.test(norm(row0.innerText)),
+             editBtn: [...row0.querySelectorAll("button")].some((x) => norm(x.textContent) === "Edit"),
+             leaveChip: /Available|On leave/.test(norm(row0.innerText)) };`);
   ok(smes.h1 === "SME management", "SME management opens", smes.h1);
   ok(smes.rows === 16, `every SME is listed (${smes.rows})`);
   ok(smes.hasCal && smes.legend, "per-SME availability calendar with legend");
-
-  const leave = await ev(`
-    const row = all("tbody tr")[0];
-    const name = norm(row.querySelector("td").innerText).split(" ")[0];
-    const btn = [...row.querySelectorAll("button")].find((x) => norm(x.textContent) === "Mark on leave");
-    btn.click(); await sleep(500);
-    const after = norm(all("tbody tr")[0].innerText);
-    return { name, onLeave: after.includes("On leave"), rerunBtn: !!byPart("tbody tr button", "Re-run without them") };`);
-  ok(leave.onLeave, `marking ${leave.name} on leave shows on the row`);
-  ok(leave.rerunBtn, "and offers 'Re-run without them'");
-
-  const beforeDrop = await ev(`return all("tbody tr").length`);
-  await ev(`byPart("tbody tr button", "Re-run without them").click(); return true;`);
-  const dropToast = await global.__waitToast(/marked unavailable/);
-  ok(!!dropToast, `drop-out from the SME table re-runs the draft: ${dropToast}`);
-  const dropRes = await ev(`return { unfilled: (toast() || ""), rows: all("tbody tr").length }`);
-  ok(dropRes.rows === beforeDrop, "the SME table stays intact after the re-run");
+  ok(smes.email, "each row shows the SME's email", smes);
+  ok(smes.editBtn && smes.leaveChip, "each row has a Profile Edit button and a leave status chip", smes);
 
   console.log("\n-- C12 batch management --");
   const batches = await ev(`
@@ -405,10 +408,12 @@ async function coordinator(ev, wait, settle, dl) {
     nav.click(); await sleep(700);
     const cardsN = all("button").filter((x) => /learners/.test(norm(x.textContent)) && /week \\d+ of/.test(norm(x.textContent))).length;
     return { h1: norm(document.querySelector("h1").textContent), batches: cardsN,
-             newBtn: !!byPart("button", "Create new batch"), topics: /running topics/i.test(body()) };`);
+             newBtn: !!byPart("button", "Create new batch"),
+             facts: /course left/i.test(body()) && /classes needed/i.test(body()) && /learners/i.test(body()),
+             addClass: !!byPart("button", "Add a class") };`);
   ok(batches.h1 === "Batch management", "Batch management opens");
   ok(batches.batches === 10, `all 10 batches shown as cards (${batches.batches})`);
-  ok(batches.topics, "running topics + assigned SMEs section present");
+  ok(batches.facts && batches.addClass, "selected batch shows its fact tiles and Add a class", batches);
 
   const created = await ev(`
     byPart("button", "Create new batch").click(); await sleep(400);
@@ -478,40 +483,29 @@ async function sme(ev, wait, settle) {
   ok(back.leave, "the SME's leave shows up in the coordinator's work items", back.text);
   await ev(`if (sheet()) byPart('[role="dialog"] button', "Close").click(); return true;`);
 
-  console.log("\n-- S4 ops change request -> SME approves --");
+  console.log("\n-- S4 a live-week change becomes a request, not an edit --");
   const req = await ev(`
     clickPart(".tab", "This week"); await sleep(500);
     const card = cards()[0];
+    const cardId = norm(card.innerText).slice(0, 40);
     card.click(); await sleep(500);
-    const t0 = sheetText() || "";
     const change = byPart('[role="dialog"] button', "Change teacher");
     if (change) { change.click(); await sleep(400); }
     const pick = all('[role="dialog"] button').filter((x) => norm(x.textContent).includes("Request →"));
     if (!pick.length) return { skipped: true, text: (sheetText() || "").slice(0, 200) };
-    pick[0].click(); await sleep(450);
-    // a risky pick arms first — confirm it (this is the spec's "allow with confirmation")
-    const confirm = all('[role="dialog"] button').find((x) => norm(x.textContent).includes("Confirm →"));
-    const needed = !!confirm;
-    const armedCopy = needed ? norm(confirm.innerText) : "";
-    if (confirm) { confirm.click(); await sleep(650); }
-    return { toast: toast(), needed, armedCopy, locked: /live/i.test(t0) };`);
+    pick[0].click(); await sleep(650);
+    return { toast: toast(), cardId };`);
   if (req.skipped) {
     ok(false, "could not open a change request on the live week", req.text);
     await ev(`if (sheet()) byPart('[role="dialog"] button', "Close").click(); return true;`);
   } else {
     ok(/Change request sent/.test(req.toast || ""), `live week sends a request instead of editing: ${req.toast}`);
-    if (req.needed) {
-      ok(!/next re-run cannot keep it/.test(req.armedCopy), "confirmation copy fits the live week (no re-run talk)", req.armedCopy);
-    }
-    const accepted = await ev(`
-      await setRole("sme");
-      const pend = has("Change requests from ops");
-      const acc = byPart("button", "Accept");
-      if (acc) acc.click(); await sleep(700);
-      return { pend, toast: toast(), gone: !has("Change requests from ops") };`);
-    ok(accepted.pend, "the SME sees the pending change request");
-    ok(/Change accepted/.test(accepted.toast || ""), `accepting confirms: ${accepted.toast}`);
-    ok(accepted.gone, "and the request clears from their queue");
+    const pend = await ev(`
+      cards()[0].click(); await sleep(500);
+      const t = sheetText() || "";
+      if (sheet()) byPart('[role="dialog"] button', "Close").click();
+      return { pending: /Change pending SME approval/.test(t) };`);
+    ok(pend.pending, "the class reports the change as pending SME approval");
   }
 }
 
@@ -522,13 +516,13 @@ async function student(ev, wait, settle) {
     await setRole("student");
     return { h1: norm(document.querySelector("h1").textContent), nav: all("nav button").map((b) => norm(b.textContent)),
              stats: all(".kpi").map((k) => norm(k.innerText).slice(0, 40)), cards: cards().length,
-             instructors: has("My instructors this week"), rerun: !!byPart("button", "Re-run draft"),
+             instructors: has("My instructors this week"),
              exportBtn: !!byPart("button", "Export CSV") };`);
   ok(sw.h1 === "My schedule", `student lands on My schedule (${sw.h1})`);
   ok(sw.nav.length === 1, "student sees only their own module");
   ok(sw.cards > 0, `their batch's classes render (${sw.cards})`);
   ok(sw.instructors, "instructor list is shown");
-  ok(!sw.rerun && !sw.exportBtn, "student gets no ops controls (no re-run, no export)");
+  ok(!sw.exportBtn, "student gets no ops controls (no export)");
 
   const only = await ev(`
     const txt = cardText().join(" | ");
@@ -545,7 +539,7 @@ async function student(ev, wait, settle) {
 
 // ------------------------------------------------------------------ features
 // The v3 additions: ops assist, publish-to-channels, un-publish on edit, add a class.
-async function features(ev, wait, settle) {
+async function features(ev, wait, settle, b) {
   const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
   const unfilled = () => `cards().filter((c) => /Unfilled/.test(norm(c.innerText))).length`;
 
@@ -579,26 +573,29 @@ async function features(ev, wait, settle) {
       c.click(); await sleep(500);
       const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
       if (!pick.length) { if (sheet()) byPart('[role="dialog"] button', "Close").click(); return false; }
-      pick[0].click(); await sleep(350);
-      const conf = all('[role="dialog"] button').find((x) => /Confirm →/.test(norm(x.textContent)));
-      if (conf) conf.click();
+      pick[0].click();
       await sleep(700); return true;`);
   }
-  ok((await ev(`return ${unfilled()}`)) === 0, "ops clears the blockers with confirmed overrides");
+  ok((await ev(`return ${unfilled()}`)) === 0, "ops clears the blockers with overrides");
   await ev(`clickPart("button", "Approve week"); return true;`); await sleepMs(700);
   const p0 = await ev(`const t = sheetText() || ""; return { open: !!sheet(), cal: /Google Calendar/.test(t),
-    email: /e-mail/i.test(t), sms: /SMS/.test(t), ready: (t.match(/Ready/g) || []).length };`);
+    email: /e-mail/i.test(t), sms: /SMS/.test(t), ready: (t.match(/Ready/g) || []).length,
+    reach: /SMEs, \\d+ students/.test(t) };`);
   ok(p0.open && p0.cal && p0.email && p0.sms, "publish sheet lists Calendar, e-mail and SMS", p0);
   ok(p0.ready >= 6, `${p0.ready} channel/audience rows are Ready`, p0);
+  ok(p0.reach, "the subtitle says who the send reaches", p0);
   await ev(`clickPart('[role="dialog"] button', "Send"); return true;`);
-  await wait(`return /Week published/i.test(sheetText() || "") || null;`, "the send to finish", 40000);
-  const p1 = await ev(`return { sent: ((sheetText() || "").match(/Sent/g) || []).length, toast: toast() };`);
-  ok(p1.sent >= 6, `every selected row reports Sent (${p1.sent})`, p1);
-  ok(/published/i.test(p1.toast || ""), `and the toast summarises where it went: ${p1.toast}`);
+  await wait(`return /Week published/i.test(sheetText() || "") || null;`, "the send to finish", 60000);
+  const p1 = await ev(`const t = sheetText() || ""; return {
+    settled: (t.match(/Sent ✓|Simulated|No recipients|Failed/g) || []).length,
+    honest: /Simulated/.test(t) ? !/Sent ✓/.test(t) : true, toast: toast() };`);
+  ok(p1.settled >= 6, `every selected row reports an outcome (${p1.settled})`, p1);
+  ok(p1.honest, "a simulated send is never reported as sent", p1);
+  ok(/published/i.test(p1.toast || ""), `and the toast says what happened: ${p1.toast}`);
   await ev(`clickPart('[role="dialog"] button', "Done"); return true;`); await sleepMs(700);
-  const p2 = await ev(`return { pill: /Published/.test(body()), gone: !byPart("button", "Approve week"),
+  const p2 = await ev(`return { pill: has("✓ Approved"), gone: !byPart("button", "Approve week"),
     ticks: cards().filter((c) => /✓/.test(norm(c.innerText))).length };`);
-  ok(p2.pill && p2.gone, "the week is badged Published", p2);
+  ok(p2.pill && p2.gone, "the week is badged Approved", p2);
   ok(p2.ticks > 0, `${p2.ticks} cards carry the approved tick`, p2);
 
   console.log("\n=== FEATURES: editing a published week un-publishes it ===");
@@ -609,12 +606,10 @@ async function features(ev, wait, settle) {
     if (ch) { ch.click(); await sleep(400); }
     const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
     if (!pick.length) return { skipped: true };
-    pick[0].click(); await sleep(350);
-    const conf = all('[role="dialog"] button').find((x) => /Confirm →/.test(norm(x.textContent)));
-    if (conf) conf.click();
+    pick[0].click();
     await sleep(900);
-    return { toast: toast(), pill: /Published/.test(body()), approveBack: !!byPart("button", "Approve week") };`);
-  ok(!un.skipped && !un.pill, "changing a teacher clears the Published badge", un);
+    return { toast: toast(), pill: has("✓ Approved"), approveBack: !!byPart("button", "Approve week") };`);
+  ok(!un.skipped && !un.pill, "changing a teacher clears the Approved badge", un);
   ok(!!un.approveBack, "and the week can be re-published", un);
   ok(/re-publishing/.test(un.toast || ""), `the toast explains why: ${un.toast}`, un);
 
@@ -626,13 +621,105 @@ async function features(ev, wait, settle) {
     if (!btn) return { skipped: true };
     btn.click(); await sleep(600);
     const t = sheetText() || "";
-    return { open: !!sheet(), form: /topic/i.test(t) && /day/i.test(t) && /time/i.test(t), free: /teacher\\(s\\) free/.test(t) };`);
+    return { open: !!sheet(), form: /topic/i.test(t) && /day/i.test(t) && /time/i.test(t), free: /Teacher — \\d+ free/i.test(t) };`);
   ok(!add.skipped && add.open && add.form, "Add a class opens a form with topic, day and time", add);
-  ok(!!add.free, "and says how many teachers are actually free for that slot", add);
+  ok(!!add.free, "and a teacher picker that says how many are actually free", add);
   const before = await ev(`return cards().length`);
-  await ev(`clickPart('[role="dialog"] button', "Add class"); return true;`);
+  await ev(`
+    const go = all('[role="dialog"] button').find((x) => /^Add (unfilled )?class$/.test(norm(x.textContent)));
+    go.click(); return true;`);
   const grew = await wait(`return cards().length === ${before + 1} ? cards().length : null;`, "the class to be drafted", 45000).catch(() => null);
   ok(!!grew, `the class is added and the draft staffs it (${before} -> ${grew})`);
+
+  console.log("\n=== FEATURES: the Excel round-trip ===");
+  const tmp = require("os").tmpdir();
+  // one row Chrome can upload for real — CDP drives the file input, so the parser runs in the page
+  const upload = async (path) => {
+    const doc = await b.send("DOM.getDocument");
+    const { nodeId } = await b.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: '[role="dialog"] input[type=file]' });
+    if (!nodeId) throw new Error("no file input in the sheet");
+    await b.send("DOM.setFileInputFiles", { files: [path], nodeId });
+    await sleepMs(700);
+  };
+
+  const classCsv = `${tmp}/ik-flow-classes.csv`;
+  fs.writeFileSync(classCsv, [
+    "batch_id,course,level,learners,topic,class_type,day,time,sme_name",
+    "DSA-01,DSA,advanced,42,Graphs & Trees,class,Sat,17:00,",
+    "ZZ-99,DSA,beginner,25,Arrays & Strings,class,Sat,18:00,",
+    "DSA-01,DSA,advanced,42,Quantum Braiding,class,Fri,11:00,",   // topic that does not exist
+  ].join("\n"));
+
+  // node-side waits, never a long sleep inside an evaluate: a re-render mid-await collects the promise
+  await ev(`const nav = all("nav button").find((x) => /Batch management/.test(x.title || "")); if (nav) nav.click(); return true;`);
+  await wait(`return !!byPart("button", "Import from Excel")`, "Batch management to open", 20000);
+  await ev(`clickPart("button", "Import from Excel"); return true;`);
+  await wait(`return !!document.querySelector('[role="dialog"] input[type=file]')`, "the class importer", 15000);
+  const imp0 = await ev(`const t = sheetText() || ""; return { open: !!sheet(), steps: /Download the template/.test(t), drop: !!document.querySelector('[role="dialog"] input[type=file]') };`);
+  ok(imp0.open && imp0.steps && imp0.drop, "Import from Excel opens the template steps and a drop zone", imp0);
+
+  await upload(classCsv);
+  const imp1 = await ev(`const t = sheetText() || ""; return { checked: /Check the upload/.test(t), ready: /2\\s*ready to import/.test(t.replace(/\\s+/g, " ")), bad: /1\\s*need fixing/.test(t.replace(/\\s+/g, " ")), why: /is not a DSA topic/.test(t), newBatch: /ZZ-99/.test(t) };`);
+  ok(imp1.checked, "a populated CSV is checked before anything is created", imp1);
+  ok(imp1.ready && imp1.bad, "and counted: 2 ready to import, 1 need fixing", imp1);
+  ok(imp1.why, "the bad row says exactly why it was rejected", imp1);
+  ok(imp1.newBatch, "the preview shows the batch the file would create", imp1);
+
+  await ev(`clickPart('[role="dialog"] button', "Import 2 classes"); return true;`);
+  // identity, not a count: the view changes to the dashboard on import, so a card tally proves nothing
+  const landed = await wait(`
+    const t = cardText().join(" | ");
+    return /ZZ-99/.test(t) && /Quantum/.test(t) === false ? { made: /ZZ-99/.test(t), rejected: !/Quantum/.test(t) } : null;`,
+    "imported classes to be drafted", 60000).catch(() => null);
+  ok(!!landed, "the two good rows are drafted and the rejected row never reaches the calendar", landed);
+  await settle();
+  await sleepMs(400);
+
+  const smeCsv = `${tmp}/ik-flow-smes.csv`;
+  fs.writeFileSync(smeCsv, [
+    "sme_id,name,email,phone,city,courses,topics,level,preferred_per_week,work_days,work_hours",
+    ",Meera Krishnan,meera.krishnan@ik.example,+91 98111 22334,Chennai,DSA,Graphs & Trees,advanced,4,Mon-Fri,09:00-18:00",
+    ",Broken Row,not-an-email,+91 1,Pune,DSA,Graphs & Trees,advanced,4,Mon-Fri,09:00-18:00",
+  ].join("\n"));
+
+  await ev(`const nav = all("nav button").find((x) => /SME management/.test(x.title || "")); if (nav) nav.click(); return true;`);
+  await wait(`return !!byPart("button", "Import SMEs")`, "SME management to open", 20000);
+  await ev(`clickPart("button", "Import SMEs"); return true;`);
+  await wait(`return !!document.querySelector('[role="dialog"] input[type=file]')`, "the SME importer", 15000);
+  await upload(smeCsv);
+  const simp = await ev(`const t = (sheetText() || "").replace(/\\s+/g, " "); return { ready: /1 ready to add/.test(t), bad: /1 need fixing/.test(t), why: /is not a valid email address/.test(t), id: /T\\d\\d/.test(t) };`);
+  ok(simp.ready && simp.bad, "the SME importer counts one teacher ready and one to fix", simp);
+  ok(simp.why, "and rejects the bad address by name", simp);
+  ok(simp.id, "the preview shows the SME id that would be issued", simp);
+
+  await ev(`clickPart('[role="dialog"] button', "Add 1 SME"); return true;`);
+  await sleepMs(900);
+  const joined = await ev(`return { onRoster: has("Meera Krishnan"), closed: !sheet() };`);
+  ok(joined.onRoster && joined.closed, "the imported SME joins the roster straight away", joined);
+
+  console.log("\n=== FEATURES: edit an SME profile ===");
+  await ev(`clickPart("button", "Edit"); return true;`);
+  await sleepMs(500);
+  const prof0 = await ev(`const t = sheetText() || ""; return { open: !!sheet(), fields: /sme id/i.test(t) && /email/i.test(t) && /classes a week/i.test(t) };`);
+  ok(prof0.open && prof0.fields, "Edit opens the profile basics", prof0);
+  const bad = await ev(`
+    const box = [...document.querySelectorAll('[role="dialog"] input')].find((i) => /@/.test(i.value));
+    const d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    d.call(box, "not-an-email"); box.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(250);
+    return { save: !!byPart('[role="dialog"] button', "Save changes"), warns: /does not look like an email/.test(sheetText() || "") };`);
+  ok(!bad.save && bad.warns, "a bad email blocks the save and says so", bad);
+  const saved = await ev(`
+    const box = [...document.querySelectorAll('[role="dialog"] input')].find((i) => /not-an-email/.test(i.value));
+    const d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    d.call(box, "renamed@ik.example"); box.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(250);
+    const btn = byPart('[role="dialog"] button', "Save changes");
+    if (!btn) return { skipped: true };
+    btn.click(); await sleep(600);
+    return { closed: !sheet(), toast: norm(document.body.innerText).includes("profile updated") };`);
+  ok(saved.closed && saved.toast, "a valid one saves and the toast confirms it", saved);
 }
+
 
 main().catch((e) => { console.error("SUITE ERROR:", e.message); process.exit(1); });

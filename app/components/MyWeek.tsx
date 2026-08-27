@@ -3,8 +3,6 @@ import type { Batch, Course, DraftRow, Meta, SME, WeekKey, WeekMeta } from "@/li
 import { AVAIL_BLOCKS, avatarBg, initials, isAvailable, istParts } from "@/lib/view";
 import WeekCalendar from "./WeekCalendar";
 
-export interface PendingChange { session_id: string; sme_id: string; name: string; from_sme_id: string | null }
-
 interface Props {
   role: "sme" | "student";
   me: SME;
@@ -25,8 +23,7 @@ interface Props {
   onOpen: (sessionId: string) => void;
   leave: string | null;
   onToggleLeave: () => void;
-  pending: PendingChange[];
-  onResolve: (sessionId: string, accept: boolean) => void;
+  onEditProfile: () => void;
 }
 
 function Stat({ label, value, sub, size = 30 }: { label: string; value: React.ReactNode; sub: string; size?: number }) {
@@ -41,7 +38,7 @@ function Stat({ label, value, sub, size = 30 }: { label: string; value: React.Re
 
 export default function MyWeek({
   role, me, myBatch, rows, smes, courses, meta, weeks, week, weekDates, approved, availOff, preferred, vh,
-  onAvail, onPreferred, onOpen, leave, onToggleLeave, pending, onResolve,
+  onAvail, onPreferred, onOpen, leave, onToggleLeave, onEditProfile,
 }: Props) {
   const isStudent = role === "student";
   const mine = isStudent ? rows.filter((r) => r.batch_id === myBatch?.id) : rows.filter((r) => r.sme_id === me.id);
@@ -63,6 +60,7 @@ export default function MyWeek({
   });
 
   const up = next ? istParts(next.start_utc) : null;
+  const nextRating = next?.sme_id ? smes.find((x) => x.id === next.sme_id)?.rating ?? null : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-[14px]">
@@ -79,11 +77,14 @@ export default function MyWeek({
             </span>
             <span className="mt-[2px] block text-[11.5px]" style={{ color: "var(--muted)" }}>
               {isStudent
-                ? `${next.batch_id} · ${next.sme_name ?? "teacher to be confirmed"}`
-                : `${next.batch_id} · ${meta.type_label[next.type]} · ${weeks[week].label.toLowerCase()}`}
+                ? [meta.type_label[next.type], next.sme_name ?? "teacher to be confirmed",
+                   nextRating ? `★ ${nextRating.toFixed(1)}` : null].filter(Boolean).join(" · ")
+                : `${next.batch_id} · ${meta.type_label[next.type]} · ${courses[next.subject]?.name ?? next.subject}`}
             </span>
           </span>
-          <button className="btn btn-brand ml-auto shrink-0" onClick={() => onOpen(next.session_id)}>Open class</button>
+          <button className="btn btn-brand ml-auto shrink-0" onClick={() => onOpen(next.session_id)}>
+            {isStudent ? "Open class" : "Class details"}
+          </button>
         </div>
       )}
       <div className="grid shrink-0 gap-[14px]" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(196px,1fr))" }}>
@@ -107,52 +108,35 @@ export default function MyWeek({
         ) : (
           <>
             <Stat label="My classes" value={mine.length} sub={`Preferred ${preferred} a week`} />
-            <Stat label="My level" value={me.level} size={19} sub={me.level === "advanced" ? "Eligible for advanced batches and mocks" : `${me.to_upgrade} classes to the next level`} />
+            <Stat label="My level" value={me.level} size={19} sub={me.level === "advanced" ? "Eligible for advanced batches and mocks" : `${me.to_upgrade} classes to advanced`} />
             <Stat label="Monthly rating" value={me.rating.toFixed(1)} sub="From learner feedback forms" />
             <Stat label="Free working hours" value={Math.max(0, freeCells.size - mine.length)} sub="Ops can still book these" />
           </>
         )}
       </div>
 
-      {!isStudent && !!pending.length && (
-        <section className="card">
-          <div className="p-[15px_20px_13px] text-[13px] font-bold" style={{ borderBottom: "1px solid var(--line-2)" }}>
-            Change requests from ops ({pending.length})
+      {/* the artboard sets the side panels beside the calendar in a fixed 322px column, not below it */}
+      <div className="grid min-h-0 flex-1 gap-4" style={{ gridTemplateColumns: "minmax(0,1fr) 322px" }}>
+        <section className="card flex min-h-0 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-3 p-[15px_20px_13px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
+            <div className="text-[13px] font-bold">
+              {isStudent ? `${myBatch?.id} · ${weeks[week].label}` : `My classes · ${weeks[week].label}`}
+            </div>
+            {!isStudent && (
+              <button className="btn btn-sm ml-auto" onClick={onEditProfile} title="Edit your contact details and weekly preference">
+                Edit my profile
+              </button>
+            )}
           </div>
-          {pending.map((p) => {
-            const row = rows.find((r) => r.session_id === p.session_id);
-            return (
-              <div key={p.session_id} className="flex flex-wrap items-center gap-3 p-[12px_20px]" style={{ borderTop: "1px solid #f3f6fb" }}>
-                <div className="min-w-0">
-                  <div className="text-[12.5px] font-semibold">
-                    {row?.batch_id} · {row?.sub_specialty ?? (row ? meta.type_label[row.type] : "")}
-                  </div>
-                  <div className="mt-px text-[11.5px]" style={{ color: "var(--muted)" }}>
-                    {row ? `${meta.days[istParts(row.start_utc).day]} ${istParts(row.start_utc).label} IST` : ""} · ops asked you to take this class
-                  </div>
-                </div>
-                <div className="ml-auto flex gap-2">
-                  <button className="btn btn-sm" onClick={() => onResolve(p.session_id, false)}>Decline</button>
-                  <button className="btn btn-go btn-sm" onClick={() => onResolve(p.session_id, true)}>Accept</button>
-                </div>
-              </div>
-            );
-          })}
+          {/* no free-slot shading here: the artboard keeps this calendar clean and shows
+              availability in the side card instead (ops still sees free slots in SME management) */}
+          <WeekCalendar
+            rows={mine} courses={courses} meta={meta} weekDates={weekDates} approved={approved}
+            onOpen={onOpen} vh={vh}
+          />
         </section>
-      )}
 
-      <section className="card flex min-h-0 flex-1 flex-col">
-        <div className="flex shrink-0 flex-wrap items-center gap-3 p-[15px_20px_13px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
-          <div className="text-[13px] font-bold">
-            {isStudent ? `${myBatch?.id} · ${weeks[week].label}` : `My classes · ${weeks[week].label}`}
-          </div>
-        </div>
-        <WeekCalendar
-          rows={mine} courses={courses} meta={meta} weekDates={weekDates} approved={approved}
-          onOpen={onOpen} freeCells={isStudent ? undefined : freeCells} vh={vh}
-        />
-      </section>
-
+        <div className="flex min-h-0 flex-col gap-4 overflow-auto">
       {isStudent ? (
         <section className="card">
           <div className="p-[15px_20px_13px] text-[13px] font-bold" style={{ borderBottom: "1px solid var(--line-2)" }}>
@@ -185,20 +169,20 @@ export default function MyWeek({
           {!byInstructor.size && <div className="p-5 text-[12.5px]" style={{ color: "var(--muted)" }}>No instructors assigned yet.</div>}
         </section>
       ) : (
-        <div className="grid gap-[14px]" style={{ gridTemplateColumns: "minmax(0,1.3fr) minmax(0,1fr)" }}>
+        <>
           <section className="card p-[18px_20px]">
             <div className="text-[13px] font-bold">My availability</div>
             <div className="mb-[14px] mt-[3px] text-[11.5px]" style={{ color: "var(--muted)" }}>
               Tap a block to switch it. Ops sees the change instantly; next week&apos;s draft respects it.
             </div>
-            <div className="grid gap-[6px]" style={{ gridTemplateColumns: "98px repeat(6,minmax(0,1fr))" }}>
+            <div className="grid gap-[5px]" style={{ gridTemplateColumns: "64px repeat(6,minmax(0,1fr))" }}>
               <div />
               {meta.days.map((d) => (
                 <div key={d} className="text-center text-[11.5px] font-semibold" style={{ color: "var(--ink-2)" }}>{d}</div>
               ))}
               {AVAIL_BLOCKS.map(([label, hrs], bi) => (
                 <div key={label} className="contents">
-                  <div className="flex items-center text-[11.5px]" style={{ color: "var(--ink-3)" }}>{label} {hrs}</div>
+                  <div className="flex items-center text-[10.5px] leading-[1.25]" style={{ color: "var(--ink-3)" }}>{label} {hrs}</div>
                   {meta.days.map((_, di) => {
                     const key = `${di}-${bi}`;
                     const off = !!availOff[key];
@@ -206,7 +190,7 @@ export default function MyWeek({
                       <button
                         key={key}
                         onClick={() => onAvail(key)}
-                        className="rounded-[12px] py-[11px] text-[11.5px]"
+                        className="overflow-hidden text-ellipsis whitespace-nowrap rounded-[10px] p-[10px_2px] text-[10.5px]"
                         style={off
                           ? { border: "1px solid var(--line)", background: "var(--page)", color: "var(--muted-2)", cursor: "pointer" }
                           : { border: "1px solid var(--green-line)", background: "#eaf5ef", color: "var(--green-ink)", fontWeight: 650, cursor: "pointer" }}
@@ -248,8 +232,10 @@ export default function MyWeek({
               Ops drafts around this number. You are currently at {mine.length} for {weeks[week].label.toLowerCase()}.
             </div>
           </section>
-        </div>
+        </>
       )}
+        </div>
+      </div>
     </div>
   );
 }

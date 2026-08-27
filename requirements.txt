@@ -1,2 +1,7 @@
 fastapi==0.141.1
 anthropic==1.1.0
+google-auth[requests]==2.43.0 # Calendar service-account tokens; the [requests] transport is what
+                              # google.auth.transport.requests needs — without it a live publish
+                              # dies with ModuleNotFoundError: requests
+
+psycopg[binary]==3.3.2       # Postgres driver for DATABASE_URL (SQLite needs nothing)

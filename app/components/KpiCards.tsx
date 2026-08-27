@@ -1,4 +1,4 @@
-import type { Batch, DraftRow, LlmStats, SME } from "@/lib/types";
+import type { Batch, DraftRow, SME } from "@/lib/types";
 import { kpis } from "@/lib/view";
 
 interface Props {
@@ -11,7 +11,6 @@ interface Props {
   unfilled: number;
   conflicts: number;
   advisory: number;
-  llm: LlmStats;
   onBatches: () => void;
   onSmes: () => void;
   onShowAll: () => void;
@@ -47,14 +46,14 @@ function Card({ label, value, unit, sub, dot, tone = "plain", onClick, tip }: {
 }
 
 export default function KpiCards({
-  rows, smes, batches, approved, leaveCount, workCount, unfilled, conflicts, advisory, llm,
+  rows, smes, batches, approved, leaveCount, workCount, unfilled, conflicts, advisory,
   onBatches, onSmes, onShowAll, onWork,
 }: Props) {
   const k = kpis(rows, smes, batches, approved);
   return (
     <div className="grid shrink-0 gap-[14px]" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(178px,1fr))" }}>
       <Card
-        label="Batches running" value={k.batches} unit="batches" dot="#2E6DA4"
+        label="Batches running" value={k.batches} unit="batches" dot="#2f5fd0"
         sub={`${k.courses} courses · ${k.learners} learners`}
         tip="Open batch management" onClick={onBatches}
       />
@@ -73,7 +72,7 @@ export default function KpiCards({
         dot={workCount ? "#c0392b" : "#0f7a52"} tone={workCount ? "alert" : "good"}
         sub={workCount
           ? `${unfilled} unfilled · ${conflicts} double-booked · ${advisory} workload / leave`
-          : `Nothing blocking · ${llm.skipped ? "settled week" : `${llm.resolved}/${llm.queued} ties by LLM`}`}
+          : "Nothing blocking this week"}
         tip="Open work items" onClick={onWork}
       />
     </div>

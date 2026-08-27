@@ -11,3 +11,6 @@ __pycache__/
 next-env.d.ts
 *.tsbuildinfo
 ik-schedule-*.csv
+.data/
+.vercel
+.env*

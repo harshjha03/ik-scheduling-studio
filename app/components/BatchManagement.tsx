@@ -1,6 +1,5 @@
 "use client";
 import type { Batch, Course, DraftRow, Meta, WeekKey, WeekMeta } from "@/lib/types";
-import { initials } from "@/lib/view";
 import WeekCalendar from "./WeekCalendar";
 
 interface Props {
@@ -18,6 +17,7 @@ interface Props {
   onOpen: (sessionId: string) => void;
   onNewBatch: () => void;
   onNewClass: () => void;
+  onImport: () => void;
 }
 
 const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
@@ -28,18 +28,30 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 
 export default function BatchManagement({
   batches, rows, courses, meta, weeks, week, weekDates, approved, selected, vh,
-  onSelect, onOpen, onNewBatch, onNewClass,
+  onSelect, onOpen, onNewBatch, onNewClass, onImport,
 }: Props) {
   const bt = batches.find((b) => b.id === selected) ?? batches[0];
   const btRows = rows.filter((r) => r.batch_id === bt.id);
   const course = courses[bt.course];
-  const topics = [...new Map(btRows.filter((r) => r.sub_specialty).map((r) => [r.sub_specialty!, r])).values()].slice(0, 4);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-[14px]">
       <div className="flex shrink-0 flex-wrap items-center gap-[10px]">
         <span className="text-[12px]" style={{ color: "var(--muted)" }}>{batches.length} batches · {weeks[week].range}</span>
-        <button className="btn btn-brand ml-auto" onClick={onNewBatch}>+ Create new batch</button>
+        <button
+          className="ml-auto inline-flex h-[38px] cursor-pointer items-center gap-[9px] rounded-[11px] bg-white p-[0_15px_0_7px] text-[12.5px] font-semibold"
+          style={{ border: "1px solid #dfe7f2", color: "var(--ink)", boxShadow: "0 1px 2px rgba(54,67,87,0.05)" }}
+          onClick={onImport}
+          title="Download the template, fill it in Excel, upload it back"
+        >
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-[8px]" style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M4.5 17.5v1.5a1.5 1.5 0 001.5 1.5h12a1.5 1.5 0 001.5-1.5v-1.5" />
+            </svg>
+          </span>
+          <span>Import from Excel</span>
+        </button>
+        <button className="btn btn-brand" onClick={onNewBatch}>+ Create new batch</button>
       </div>
 
       <div className="flex shrink-0 gap-3 overflow-x-auto overflow-y-hidden p-[2px_2px_8px]">
@@ -53,7 +65,7 @@ export default function BatchManagement({
             <button
               key={b.id}
               onClick={() => onSelect(b.id)}
-              className="block w-[248px] shrink-0 rounded-[18px] p-[16px_17px] text-left transition hover:-translate-y-[2px]"
+              className="block w-[236px] shrink-0 rounded-[16px] p-[13px_15px] text-left transition hover:-translate-y-[2px]"
               style={{
                 border: `1px solid ${on ? c?.accent : "var(--line)"}`, background: on ? c?.tint : "#fff",
                 cursor: "pointer", boxShadow: "0 1px 2px rgba(16,26,51,0.03)",
@@ -130,27 +142,6 @@ export default function BatchManagement({
               <div className="mt-[5px] text-[15px] font-bold" style={{ color: "var(--green-ink)" }}>{bt.learners}</div>
               <div className="mt-1 text-[11px]" style={{ color: "#3c7a62" }}>started {bt.started}</div>
             </div>
-          </div>
-        </div>
-
-        <div className="p-[14px_20px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
-          <div className="label-caps mb-[10px]">Running topics &amp; assigned SMEs</div>
-          <div className="grid gap-[10px]" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))" }}>
-            {topics.map((r) => (
-              <div key={r.sub_specialty} className="rounded-[14px] p-[12px_13px]" style={{ background: course?.tint }}>
-                <div className="text-[12.5px] font-semibold">{r.sub_specialty}</div>
-                <div className="mt-[7px] flex items-center gap-[7px]">
-                  <span className="flex size-[22px] items-center justify-center rounded-full bg-white text-[9.5px] font-bold" style={{ color: "var(--ink-2)" }}>
-                    {r.sme_name ? initials(r.sme_name) : "—"}
-                  </span>
-                  <span className="text-[11.5px]" style={{ color: "var(--ink-2)", fontWeight: 550 }}>{r.sme_name ?? "Unfilled"}</span>
-                  <span className="ml-auto text-[10.5px]" style={{ color: "var(--muted)" }}>
-                    {btRows.filter((x) => x.sub_specialty === r.sub_specialty).length} class(es)
-                  </span>
-                </div>
-              </div>
-            ))}
-            {!topics.length && <div className="text-[12px]" style={{ color: "var(--muted)" }}>No topic classes scheduled this week.</div>}
           </div>
         </div>
 

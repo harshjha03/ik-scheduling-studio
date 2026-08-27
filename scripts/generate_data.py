@@ -117,11 +117,34 @@ def to_utc_windows(local: dict, tz: str, week: str) -> list[dict]:
     return out
 
 
+# Real inboxes for end-to-end testing, by SME id. Everyone else gets an undeliverable placeholder,
+# so a stray live send can only ever reach someone who opted in here. T14 is the SME persona the UI
+# logs in as (`meta.me`), so it is the one whose schedule you can actually check in a real inbox.
+REAL_CONTACTS = {"T14": "tushartimes112@gmail.com"}
+
+
+def contact_for(sid: str, name: str) -> tuple[str, str]:
+    """Deterministic contacts. Anything not in REAL_CONTACTS is deliberately undeliverable:
+    `.example` is reserved (RFC 2606) and the numbers are placeholders. Publishing for real needs
+    PUBLISH_REDIRECT_TO / PUBLISH_REDIRECT_SMS_TO, or these fields replaced with the real roster."""
+    email = REAL_CONTACTS.get(sid) or f"{name.lower().replace(' ', '.')}@ik.example"
+    return email, f"+9199{int(sid[1:]):08d}"
+
+
+def build_batches() -> list[dict]:
+    """Where a cohort is reachable: `contact_email` is the batch distribution list, `calendar_id`
+    the cohort calendar to publish into (null = the shared GOOGLE_CALENDAR_ID). No group phone
+    number exists for students, so batch SMS honestly reports no recipients."""
+    return [{**b, "contact_email": f"{b['id'].lower()}@ik.example",
+             "contact_phone": None, "calendar_id": None} for b in BATCHES]
+
+
 def build_smes(week: str = "next") -> list[dict]:
     smes = []
     for sid, name, courses, topics, level, to_up, rating, preferred, city, tz in SME_DEFS:
+        email, phone = contact_for(sid, name)
         smes.append({
-            "id": sid, "name": name,
+            "id": sid, "name": name, "email": email, "phone": phone,
             "subject": courses[0], "subjects": courses,           # engine: multi-course
             "sub_specialty": None, "topics": topics,               # engine: multi-topic
             "training_level": LEVEL_NUM[level], "level": level, "to_upgrade": to_up,
@@ -378,7 +401,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     files = {
         "sessions_current": cur, "sessions_next": nxt, "smes": smes, "smes_current": smes_cur,
-        "history": history, "batches": BATCHES, "courses": COURSES, "weeks": WEEKS,
+        "history": history, "batches": build_batches(), "courses": COURSES, "weeks": WEEKS,
         "meta": {"days": DAYS, "hours": [HOURS[0], HOURS[-1] + 1], "levels": LEVELS,
                  "type_label": TYPE_LABEL, "me": "T14", "my_batch": "DSA-01"},
     }

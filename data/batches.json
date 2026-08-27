@@ -7,7 +7,10 @@
   "per_week": 5,
   "weeks_done": 9,
   "weeks_total": 14,
-  "started": "15 Jun 2026"
+  "started": "15 Jun 2026",
+  "contact_email": "dsa-01@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "DSA-02",
@@ -17,7 +20,10 @@
   "per_week": 5,
   "weeks_done": 6,
   "weeks_total": 14,
-  "started": "13 Jul 2026"
+  "started": "13 Jul 2026",
+  "contact_email": "dsa-02@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "DSA-03",
@@ -27,7 +33,10 @@
   "per_week": 4,
   "weeks_done": 4,
   "weeks_total": 16,
-  "started": "27 Jul 2026"
+  "started": "27 Jul 2026",
+  "contact_email": "dsa-03@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "DSA-04",
@@ -37,7 +46,10 @@
   "per_week": 4,
   "weeks_done": 2,
   "weeks_total": 14,
-  "started": "10 Aug 2026"
+  "started": "10 Aug 2026",
+  "contact_email": "dsa-04@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "ML-01",
@@ -47,7 +59,10 @@
   "per_week": 5,
   "weeks_done": 8,
   "weeks_total": 12,
-  "started": "22 Jun 2026"
+  "started": "22 Jun 2026",
+  "contact_email": "ml-01@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "ML-02",
@@ -57,7 +72,10 @@
   "per_week": 4,
   "weeks_done": 3,
   "weeks_total": 12,
-  "started": "3 Aug 2026"
+  "started": "3 Aug 2026",
+  "contact_email": "ml-02@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "AI-01",
@@ -67,7 +85,10 @@
   "per_week": 4,
   "weeks_done": 5,
   "weeks_total": 10,
-  "started": "20 Jul 2026"
+  "started": "20 Jul 2026",
+  "contact_email": "ai-01@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "AI-02",
@@ -77,7 +98,10 @@
   "per_week": 3,
   "weeks_done": 1,
   "weeks_total": 10,
-  "started": "17 Aug 2026"
+  "started": "17 Aug 2026",
+  "contact_email": "ai-02@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "PM-01",
@@ -87,7 +111,10 @@
   "per_week": 4,
   "weeks_done": 7,
   "weeks_total": 12,
-  "started": "6 Jul 2026"
+  "started": "6 Jul 2026",
+  "contact_email": "pm-01@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  },
  {
   "id": "PM-02",
@@ -97,6 +124,9 @@
   "per_week": 3,
   "weeks_done": 2,
   "weeks_total": 12,
-  "started": "10 Aug 2026"
+  "started": "10 Aug 2026",
+  "contact_email": "pm-02@ik.example",
+  "contact_phone": null,
+  "calendar_id": null
  }
 ]

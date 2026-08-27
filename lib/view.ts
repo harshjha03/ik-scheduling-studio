@@ -17,7 +17,8 @@ export function istParts(utc: string): { day: number; hour: number; label: strin
   const d = new Date(utc);
   const day = DAY_ORDER.indexOf(dayFmt.format(d));
   const hour = parseInt(hourFmt.format(d), 10);
-  return { day, hour, label: `${String(hour).padStart(2, "0")}:00`, date: dateFmt.format(d) };
+  // en-GB spells September "Sept"; the design uses three letters everywhere
+  return { day, hour, label: `${String(hour).padStart(2, "0")}:00`, date: dateFmt.format(d).replace("Sept", "Sep") };
 }
 
 export const hhmm = (h: number) => `${String(h).padStart(2, "0")}:00`;
@@ -355,13 +356,6 @@ export function smeWeekStats(sme: SME, rows: DraftRow[]) {
   const assigned = rows.filter((r) => r.sme_id === sme.id).length;
   const load4w = sme.history.slice(-3).reduce((a, w) => a + w.sessions_taught, 0) + assigned;
   return { assigned, load4w, over: assigned > sme.preferred };
-}
-
-export function poolMean(smes: SME[], subject: string, rows: DraftRow[]): number {
-  const pool = smes.filter((s) => s.subjects.includes(subject));
-  if (!pool.length) return 0;
-  const loads = pool.map((s) => smeWeekStats(s, rows).load4w);
-  return loads.reduce((a, b) => a + b, 0) / loads.length;
 }
 
 // ---- new batch ----
