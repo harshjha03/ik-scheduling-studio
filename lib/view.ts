@@ -64,16 +64,20 @@ export function category(row: DraftRow, approved: boolean): Category {
   return row.flags.length ? "amber" : "staffed";
 }
 
-export const CATEGORIES: { key: Category; label: string; hint: string; dot: string; swatch: string }[] = [
-  { key: "red", label: "Unfilled / conflict", hint: "No eligible teacher, or a double booking", dot: "#c0392b",
-    swatch: "background:#fbebe8;border:1px solid #f0c7c0;border-left:3px solid #c0392b" },
-  { key: "amber", label: "Workload / tie-break", hint: "Outside the fairness band, or an LLM broke a near-tie", dot: "#d18b3c",
-    swatch: "background:#fbf3e3;border:1px solid #eddba6;border-left:3px solid #d18b3c" },
-  { key: "approved", label: "Approved", hint: "Signed off and ready to publish", dot: "#0f7a52",
-    swatch: "background:#e6f2ec;border:1px solid #c2e2ce;border-left:3px solid #0f7a52" },
-  { key: "staffed", label: "Staffed · no flags", hint: "Teacher assigned and inside every rule", dot: "#2f5fd0",
-    swatch: "background:#fff;border:1px solid #e2e8f1;border-left:3px solid #2f5fd0" },
+export const CATEGORIES: { key: Category; label: string; hint: string; dot: string }[] = [
+  { key: "red", label: "Unfilled / conflict", hint: "No eligible teacher, or a double booking", dot: "#c0392b" },
+  { key: "amber", label: "Workload / tie-break", hint: "Outside the fairness band, or an LLM broke a near-tie", dot: "#d18b3c" },
+  { key: "approved", label: "Approved", hint: "Signed off and ready to publish", dot: "#0f7a52" },
+  { key: "staffed", label: "Staffed · no flags", hint: "Teacher assigned and inside every rule", dot: "var(--brand)" },
 ];
+
+/**
+ * A box whose left edge is an accent. React warns if a `border` shorthand and `borderLeft` are set
+ * in the same style object (either can win on re-render), so expand to one property per side.
+ */
+export function accentBorder(all: string, left: string) {
+  return { borderTop: all, borderRight: all, borderBottom: all, borderLeft: left };
+}
 
 // ---- availability ----
 

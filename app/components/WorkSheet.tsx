@@ -1,6 +1,6 @@
 "use client";
 import type { Fix, ResolvedEntry, WorkItem } from "@/lib/types";
-import { FLAG_LABEL, SEV_CHIP, initials, avatarBg } from "@/lib/view";
+import { FLAG_LABEL, SEV_CHIP, accentBorder, initials, avatarBg } from "@/lib/view";
 
 interface Props {
   items: WorkItem[];
@@ -137,10 +137,10 @@ export default function WorkSheet({
                   <div
                     key={w.key}
                     className="rounded-[14px] bg-white p-[13px_15px]"
-                    style={{
-                      border: `1px solid ${w.blocking ? "var(--red-line)" : "var(--amber-line)"}`,
-                      borderLeft: `3px solid ${w.blocking ? "var(--red)" : "var(--amber)"}`,
-                    }}
+                    style={accentBorder(
+                      `1px solid ${w.blocking ? "var(--red-line)" : "var(--amber-line)"}`,
+                      `3px solid ${w.blocking ? "var(--red)" : "var(--amber)"}`,
+                    )}
                   >
                     <div className="flex items-start gap-[10px]">
                       <span className={`chip ${SEV_CHIP[w.severity]}`}>{w.code === "LEAVE" ? "LEAVE" : FLAG_LABEL[w.code]}</span>

@@ -1,7 +1,7 @@
 "use client";
 import type { Course, DraftRow, Meta, SME, WeekKey, WeekMeta } from "@/lib/types";
 import type { SmeFilter } from "@/lib/view";
-import { avatarBg, fitsFor, initials, istParts, isAvailable, poolMean, smeMatches, smeWeekStats } from "@/lib/view";
+import { accentBorder, avatarBg, fitsFor, initials, istParts, isAvailable, poolMean, smeMatches, smeWeekStats } from "@/lib/view";
 import WeekCalendar, { type GhostRow } from "./WeekCalendar";
 
 interface Props {
@@ -224,7 +224,10 @@ export default function SmeManagement({
             free working hour
           </span>
           <span>
-            <span className="mr-[6px] inline-block size-[10px] rounded-[3px]" style={{ background: "#fff", border: "1px solid var(--field)", borderLeft: "3px solid #4a7fd0" }} />
+            <span
+              className="mr-[6px] inline-block size-[10px] rounded-[3px]"
+              style={{ background: "#fff", ...accentBorder("1px solid var(--field)", "3px solid #4a7fd0") }}
+            />
             assigned class
           </span>
           <span>

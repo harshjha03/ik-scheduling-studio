@@ -14,14 +14,16 @@ const fs = require("fs");
 const os = require("os");
 
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const PORT = 9333;
+// a fixed port/profile would silently attach to a stale browser from an earlier run
+const PORT = 9333 + Math.floor(Math.random() * 400);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function launch(url) {
+  const profileDir = require("fs").mkdtempSync(require("os").tmpdir() + "/cdp-ik-");
   const proc = spawn(CHROME, [
     "--headless=new", `--remote-debugging-port=${PORT}`, "--no-first-run", "--no-default-browser-check",
-    "--disable-gpu", "--window-size=1680,1400", `--user-data-dir=/tmp/cdp-ik-profile`, url,
+    "--disable-gpu", "--window-size=1680,1400", `--user-data-dir=${profileDir}`, url,
   ], { stdio: "ignore" });
   let info = null;
   for (let i = 0; i < 60 && !info; i++) {
@@ -37,9 +39,17 @@ async function launch(url) {
 
   let id = 0;
   const waiters = new Map();
+  const logs = [];
   ws.onmessage = (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && waiters.has(msg.id)) { waiters.get(msg.id)(msg); waiters.delete(msg.id); }
+    if (msg.id && waiters.has(msg.id)) { waiters.get(msg.id)(msg); waiters.delete(msg.id); return; }
+    if (msg.method === "Runtime.consoleAPICalled") {
+      logs.push({ level: msg.params.type, text: (msg.params.args || []).map((a) => a.value ?? a.description ?? "").join(" ") });
+    } else if (msg.method === "Log.entryAdded") {
+      logs.push({ level: msg.params.entry.level, text: msg.params.entry.text });
+    } else if (msg.method === "Runtime.exceptionThrown") {
+      logs.push({ level: "error", text: msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text });
+    }
   };
   const send = (method, params = {}) => new Promise((res, rej) => {
     const mid = ++id;
@@ -78,7 +88,7 @@ async function launch(url) {
   };
 
   const close = async () => { try { ws.close(); } catch {} proc.kill("SIGKILL"); };
-  return { evaluate, waitFor, goto, close, send };
+  return { evaluate, waitFor, goto, close, send, logs };
 }
 
 /** Helpers injected into every page evaluation. */
@@ -161,6 +171,9 @@ async function main() {
   };
   global.__waitToast = waitToast;
 
+  await b.send("Runtime.enable");
+  await b.send("Log.enable");
+
   try {
     await wait(`return has("Batches running") && cards().length > 0`, "first draft rendered", 60000);
 
@@ -174,6 +187,12 @@ async function main() {
     if (!only || only === "features") { await b.goto("http://localhost:3000/");
       await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
       await features(ev, wait, settle); }
+    // React warnings (mixed style shorthands, key errors, bad state updates) must not pile up unseen
+    console.log("\n=== console ===");
+    const noise = /Download the React DevTools|\[HMR\]|favicon\.ico/i;
+    const bad = b.logs.filter((l) => ["error", "warning"].includes(l.level) && !noise.test(l.text));
+    ok(bad.length === 0, `no console errors or warnings during the run (${b.logs.length} messages seen)`,
+      bad.slice(0, 4).map((l) => `[${l.level}] ${l.text.slice(0, 160)}`));
   } finally {
     await b.close();
   }

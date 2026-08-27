@@ -1,7 +1,7 @@
 "use client";
 import type { CSSProperties } from "react";
 import type { Course, DraftRow, Meta, SessionType } from "@/lib/types";
-import { hhmm, istParts, topFlag, FLAG_LABEL, SEV_CHIP } from "@/lib/view";
+import { accentBorder, hhmm, istParts, topFlag, FLAG_LABEL, SEV_CHIP } from "@/lib/view";
 
 const ROW_H = 84;      // tallest an hour row is allowed to get
 const MIN_ROW = 40;    // shortest, on a very short viewport
@@ -153,8 +153,8 @@ export default function WeekCalendar({
                       onClick={() => onGhost?.(g.session_id)}
                       title={`${g.batch_id} · ${g.sub_specialty ?? meta.type_label[g.type]} · needs a teacher`}
                       style={{
-                        ...base, background: "var(--sand-tint)", border: "1px dashed var(--amber)",
-                        borderLeft: "3px solid var(--amber)",
+                        ...base, background: "var(--sand-tint)",
+                        ...accentBorder("1px dashed var(--amber)", "3px solid var(--amber)"),
                       }}
                     >
                       <span className="flex w-full flex-nowrap items-center gap-[5px] overflow-hidden whitespace-nowrap">
@@ -186,9 +186,11 @@ export default function WeekCalendar({
                     style={{
                       ...base,
                       background: unfilled ? "var(--red-tint)" : medium ? "#fdf9ef" : okApproved ? "#f4faf6" : "#fff",
-                      border: unfilled ? "1px solid var(--red-line)" : medium ? "1px solid var(--amber-line)"
-                        : okApproved ? "1px solid var(--green-line)" : "1px solid #ece9f5",
-                      borderLeft: `3px solid ${unfilled ? "var(--red)" : okApproved ? "var(--green)" : course?.accent ?? "var(--brand)"}`,
+                      ...accentBorder(
+                        unfilled ? "1px solid var(--red-line)" : medium ? "1px solid var(--amber-line)"
+                          : okApproved ? "1px solid var(--green-line)" : "1px solid #ece9f5",
+                        `3px solid ${unfilled ? "var(--red)" : okApproved ? "var(--green)" : course?.accent ?? "var(--brand)"}`,
+                      ),
                       boxShadow: unfilled ? "0 2px 10px rgba(192,57,43,0.16)" : base.boxShadow,
                     }}
                   >
