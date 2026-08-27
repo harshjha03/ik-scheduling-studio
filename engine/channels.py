@@ -253,8 +253,9 @@ def send_calendar(rows: list[dict], audience: str, store=None, api=None, calenda
     invite = audience == "sme" and can_invite()
     q = "?sendUpdates=all" if invite else "?sendUpdates=none"
     sent, failed = 0, []
+    owned = store.events_on(cal) if store else {}                # one round-trip for the whole batch
     for row in rows:
-        known = store.event_for(row["session_id"], cal) if store else None
+        known = owned.get(row["session_id"])
         email = row.get("sme_email")
         body = event_body(row, email if invite and deliverable(email) else None)
         try:

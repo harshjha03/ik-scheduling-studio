@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 import threading
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 
 _lock = threading.Lock()          # ponytail: one process, one lock; per-connection pooling if it ever matters
@@ -60,6 +60,7 @@ class Store:
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".data", "ik.db")
         if self.driver == "sqlite":
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self._pg = None      # one long-lived Postgres connection per process (see _connect)
         self._init()
 
     # ---- plumbing ----
@@ -67,7 +68,11 @@ class Store:
     def _connect(self):
         if self.driver == "postgres":
             import psycopg  # imported lazily so local dev needs no driver at all
-            return psycopg.connect(self.url)
+            # A fresh TCP+TLS handshake per query cost ~2s each from Vercel to Neon; a publish does
+            # two per class row. Keep one connection and reconnect only when Neon has dropped it.
+            if self._pg is None or self._pg.closed:
+                self._pg = psycopg.connect(self.url)
+            return self._pg
         conn = sqlite3.connect(self.path)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
@@ -82,14 +87,24 @@ class Store:
         # closing() matters for sqlite: its `with conn` commits but never closes, so a long-lived
         # dev server leaked one file handle per query. psycopg closes on exit anyway.
         try:
-            with _lock, closing(self._connect()) as conn, conn:
-                cur = conn.cursor()
-                cur.execute(self._sql(q), args)
-                return cur.fetchall() if fetch == "all" else cur.fetchone() if fetch == "one" else None
+            with _lock:
+                conn = self._connect()
+                # sqlite: close after every query (a dev server leaked one handle per query otherwise);
+                # postgres: keep it open, `with conn` still commits/rolls back the transaction.
+                with (nullcontext(conn) if self.driver == "postgres" else closing(conn)), conn:
+                    cur = conn.cursor()
+                    cur.execute(self._sql(q), args)
+                    return cur.fetchall() if fetch == "all" else cur.fetchone() if fetch == "one" else None
         except Exception as exc:
+            msg = str(exc)
+            # Neon suspends idle compute and drops the socket; the next query fails once. Reconnect and retry.
+            if retry and self.driver == "postgres" and (self._pg is None or self._pg.closed or
+                                                       "connection" in msg.lower() or "SSL" in msg):
+                self._pg = None
+                return self._run(q, args, fetch, retry=False)
             # The schema is created once per process. If the .db file is deleted, or the database is
             # reset, under a long-lived process, every later query fails forever — rebuild and retry.
-            if not (retry and ("no such table" in str(exc) or "does not exist" in str(exc))):
+            if not (retry and ("no such table" in msg or "does not exist" in msg)):
                 raise
             self._init()
             return self._run(q, args, fetch, retry=False)
@@ -145,6 +160,12 @@ class Store:
         else:
             self._run("INSERT OR REPLACE INTO calendar_event (session_id, calendar_id, event_id, updated_at) "
                       "VALUES (?,?,?,?)", (session_id, calendar_id, event_id, now()))
+
+    def events_on(self, calendar_id: str) -> dict[str, str]:
+        """{session_id: event_id} for every event we own on one calendar — one query, not one per row."""
+        rows = self._run("SELECT session_id, event_id FROM calendar_event WHERE calendar_id = ?",
+                         (calendar_id,), fetch="all")
+        return {r[0]: r[1] for r in (rows or [])}
 
     def event_for(self, session_id: str, calendar_id: str) -> str | None:
         """The event id we already own for this class *on this calendar*, if any."""
