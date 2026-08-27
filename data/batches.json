@@ -1,0 +1,102 @@
+[
+ {
+  "id": "DSA-01",
+  "course": "DSA",
+  "level": "advanced",
+  "learners": 42,
+  "per_week": 5,
+  "weeks_done": 9,
+  "weeks_total": 14,
+  "started": "15 Jun 2026"
+ },
+ {
+  "id": "DSA-02",
+  "course": "DSA",
+  "level": "intermediate",
+  "learners": 38,
+  "per_week": 5,
+  "weeks_done": 6,
+  "weeks_total": 14,
+  "started": "13 Jul 2026"
+ },
+ {
+  "id": "DSA-03",
+  "course": "DSA",
+  "level": "beginner",
+  "learners": 44,
+  "per_week": 4,
+  "weeks_done": 4,
+  "weeks_total": 16,
+  "started": "27 Jul 2026"
+ },
+ {
+  "id": "DSA-04",
+  "course": "DSA",
+  "level": "intermediate",
+  "learners": 36,
+  "per_week": 4,
+  "weeks_done": 2,
+  "weeks_total": 14,
+  "started": "10 Aug 2026"
+ },
+ {
+  "id": "ML-01",
+  "course": "ML",
+  "level": "advanced",
+  "learners": 31,
+  "per_week": 5,
+  "weeks_done": 8,
+  "weeks_total": 12,
+  "started": "22 Jun 2026"
+ },
+ {
+  "id": "ML-02",
+  "course": "ML",
+  "level": "intermediate",
+  "learners": 28,
+  "per_week": 4,
+  "weeks_done": 3,
+  "weeks_total": 12,
+  "started": "3 Aug 2026"
+ },
+ {
+  "id": "AI-01",
+  "course": "AI",
+  "level": "intermediate",
+  "learners": 26,
+  "per_week": 4,
+  "weeks_done": 5,
+  "weeks_total": 10,
+  "started": "20 Jul 2026"
+ },
+ {
+  "id": "AI-02",
+  "course": "AI",
+  "level": "beginner",
+  "learners": 22,
+  "per_week": 3,
+  "weeks_done": 1,
+  "weeks_total": 10,
+  "started": "17 Aug 2026"
+ },
+ {
+  "id": "PM-01",
+  "course": "PM",
+  "level": "advanced",
+  "learners": 19,
+  "per_week": 4,
+  "weeks_done": 7,
+  "weeks_total": 12,
+  "started": "6 Jul 2026"
+ },
+ {
+  "id": "PM-02",
+  "course": "PM",
+  "level": "beginner",
+  "learners": 21,
+  "per_week": 3,
+  "weeks_done": 2,
+  "weeks_total": 12,
+  "started": "10 Aug 2026"
+ }
+]

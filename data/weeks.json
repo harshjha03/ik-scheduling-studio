@@ -1,0 +1,16 @@
+{
+ "current": {
+  "key": "current",
+  "label": "This week",
+  "range": "31 Aug \u2013 5 Sep 2026",
+  "locked": true,
+  "iso": "2026-W36"
+ },
+ "next": {
+  "key": "next",
+  "label": "Next week",
+  "range": "7 Sep \u2013 12 Sep 2026",
+  "locked": false,
+  "iso": "2026-W37"
+ }
+}

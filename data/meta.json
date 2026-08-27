@@ -1,0 +1,26 @@
+{
+ "days": [
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat"
+ ],
+ "hours": [
+  8,
+  20
+ ],
+ "levels": [
+  "beginner",
+  "intermediate",
+  "advanced"
+ ],
+ "type_label": {
+  "class": "Class",
+  "doubt": "Doubt session",
+  "mock": "Mock interview"
+ },
+ "me": "T14",
+ "my_batch": "DSA-01"
+}

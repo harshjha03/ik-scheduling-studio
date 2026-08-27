@@ -1,0 +1,54 @@
+{
+ "DSA": {
+  "id": "DSA",
+  "name": "Data Structures & Algorithms",
+  "accent": "#2f5fd0",
+  "tint": "#e9eff8",
+  "deep": "#1f3c78",
+  "topics": [
+   "Arrays & Strings",
+   "Graphs & Trees",
+   "Dynamic Programming",
+   "System Design \u2014 HLD"
+  ]
+ },
+ "ML": {
+  "id": "ML",
+  "name": "Machine Learning",
+  "accent": "#5568c4",
+  "tint": "#eceff9",
+  "deep": "#31418f",
+  "topics": [
+   "ML System Design",
+   "ML Coding",
+   "Statistics & Probability",
+   "MLOps"
+  ]
+ },
+ "AI": {
+  "id": "AI",
+  "name": "Applied AI & LLMs",
+  "accent": "#2b8f83",
+  "tint": "#e6f2f0",
+  "deep": "#186e63",
+  "topics": [
+   "LLM App Design",
+   "RAG & Retrieval",
+   "Prompt & Eval Systems",
+   "Agentic Patterns"
+  ]
+ },
+ "PM": {
+  "id": "PM",
+  "name": "Product & Program Management",
+  "accent": "#7d8aa8",
+  "tint": "#eff1f7",
+  "deep": "#4a5670",
+  "topics": [
+   "Product Sense",
+   "Execution & Metrics",
+   "Behavioral & Leadership",
+   "Program Strategy"
+  ]
+ }
+}

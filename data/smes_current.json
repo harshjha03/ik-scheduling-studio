@@ -1,0 +1,1840 @@
+[
+ {
+  "id": "T01",
+  "name": "Ananya Iyer",
+  "subject": "DSA",
+  "subjects": [
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Arrays & Strings",
+   "Graphs & Trees",
+   "Dynamic Programming"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Bengaluru",
+  "rating": 4.8,
+  "preferred": 6,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "02:30",
+    "end_utc": "08:30",
+    "local": "08:00\u201314:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Happy to take extra load; prefers evening slots and advanced batches.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 8,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.9,
+     "Graphs & Trees": 4.9,
+     "Dynamic Programming": 4.9,
+     "doubt": 4.7,
+     "dsa": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 8,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.9,
+     "Graphs & Trees": 4.9,
+     "Dynamic Programming": 4.9,
+     "doubt": 4.7,
+     "dsa": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 8,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.9,
+     "Graphs & Trees": 4.9,
+     "Dynamic Programming": 4.9,
+     "doubt": 4.7,
+     "dsa": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 8,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.9,
+     "Graphs & Trees": 4.9,
+     "Dynamic Programming": 4.9,
+     "doubt": 4.7,
+     "dsa": 4.8
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T02",
+  "name": "Rohan Mehta",
+  "subject": "DSA",
+  "subjects": [
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Arrays & Strings",
+   "Dynamic Programming"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 8,
+  "timezone": "Asia/Kolkata",
+  "city": "Pune",
+  "rating": 4.5,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Prefers morning slots; finds DSA-04 challenging.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.4,
+     "Dynamic Programming": 4.4,
+     "doubt": 4.4,
+     "dsa": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.4,
+     "Dynamic Programming": 4.4,
+     "doubt": 4.4,
+     "dsa": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.4,
+     "Dynamic Programming": 4.4,
+     "doubt": 4.4,
+     "dsa": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-01",
+     "DSA-02"
+    ],
+    "per_topic_rating": {
+     "Arrays & Strings": 4.4,
+     "Dynamic Programming": 4.4,
+     "doubt": 4.4,
+     "dsa": 4.5
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T03",
+  "name": "Kavya Nair",
+  "subject": "DSA",
+  "subjects": [
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Graphs & Trees",
+   "Arrays & Strings"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Kochi",
+  "rating": 4.7,
+  "preferred": 4,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "02:30",
+    "end_utc": "10:30",
+    "local": "08:00\u201316:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Enjoys graph-heavy sessions; would rather not teach two classes back to back.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-02",
+     "DSA-03"
+    ],
+    "per_topic_rating": {
+     "Graphs & Trees": 4.8,
+     "Arrays & Strings": 4.6,
+     "doubt": 4.6,
+     "dsa": 4.7
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-02",
+     "DSA-03"
+    ],
+    "per_topic_rating": {
+     "Graphs & Trees": 4.8,
+     "Arrays & Strings": 4.6,
+     "doubt": 4.6,
+     "dsa": 4.7
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-02",
+     "DSA-03"
+    ],
+    "per_topic_rating": {
+     "Graphs & Trees": 4.8,
+     "Arrays & Strings": 4.6,
+     "doubt": 4.6,
+     "dsa": 4.7
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-02",
+     "DSA-03"
+    ],
+    "per_topic_rating": {
+     "Graphs & Trees": 4.8,
+     "Arrays & Strings": 4.6,
+     "doubt": 4.6,
+     "dsa": 4.7
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T04",
+  "name": "Arjun Sharma",
+  "subject": "DSA",
+  "subjects": [
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "System Design \u2014 HLD",
+   "Graphs & Trees"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Gurugram",
+  "rating": 4.9,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "04:30",
+    "end_utc": "12:30",
+    "local": "10:00\u201318:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Strong on system design; prefers afternoons and mock interviews.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-03",
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.7,
+     "Graphs & Trees": 5.0,
+     "doubt": 4.8,
+     "dsa": 4.9
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-03",
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.7,
+     "Graphs & Trees": 5.0,
+     "doubt": 4.8,
+     "dsa": 4.9
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-03",
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.7,
+     "Graphs & Trees": 5.0,
+     "doubt": 4.8,
+     "dsa": 4.9
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-03",
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.7,
+     "Graphs & Trees": 5.0,
+     "doubt": 4.8,
+     "dsa": 4.9
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T05",
+  "name": "Neha Kulkarni",
+  "subject": "DSA",
+  "subjects": [
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "System Design \u2014 HLD"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 4,
+  "timezone": "Asia/Kolkata",
+  "city": "Mumbai",
+  "rating": 4.4,
+  "preferred": 4,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Tue",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "06:30",
+    "end_utc": "12:30",
+    "local": "12:00\u201318:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Prefers a steady weekly load; enjoys DSA-02.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.4,
+     "doubt": 4.3,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.4,
+     "doubt": 4.3,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.4,
+     "doubt": 4.3,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "DSA-04"
+    ],
+    "per_topic_rating": {
+     "System Design \u2014 HLD": 4.4,
+     "doubt": 4.3,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T06",
+  "name": "Vikram Rao",
+  "subject": "DSA",
+  "subjects": [
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Dynamic Programming",
+   "Arrays & Strings"
+  ],
+  "training_level": 1,
+  "level": "beginner",
+  "to_upgrade": 3,
+  "timezone": "Asia/Kolkata",
+  "city": "Hyderabad",
+  "rating": 4.2,
+  "preferred": 3,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "08:30",
+    "end_utc": "14:30",
+    "local": "14:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "08:30",
+    "end_utc": "14:30",
+    "local": "14:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "08:30",
+    "end_utc": "14:30",
+    "local": "14:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "04:30",
+    "end_utc": "12:30",
+    "local": "10:00\u201318:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "New to advanced material; keen on more doubt sessions.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "Dynamic Programming": 4.1,
+     "Arrays & Strings": 4.0,
+     "doubt": 4.1,
+     "dsa": 4.2
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "Dynamic Programming": 4.1,
+     "Arrays & Strings": 4.0,
+     "doubt": 4.1,
+     "dsa": 4.2
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "Dynamic Programming": 4.1,
+     "Arrays & Strings": 4.0,
+     "doubt": 4.1,
+     "dsa": 4.2
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "Dynamic Programming": 4.1,
+     "Arrays & Strings": 4.0,
+     "doubt": 4.1,
+     "dsa": 4.2
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T07",
+  "name": "Priya Menon",
+  "subject": "ML",
+  "subjects": [
+   "ML"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "ML System Design",
+   "ML Coding"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Bengaluru",
+  "rating": 4.8,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Prefers ML system design over coding drills; enjoys continuity with ML-01.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01"
+    ],
+    "per_topic_rating": {
+     "ML System Design": 4.6,
+     "ML Coding": 4.9,
+     "doubt": 4.7,
+     "ml": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01"
+    ],
+    "per_topic_rating": {
+     "ML System Design": 4.6,
+     "ML Coding": 4.9,
+     "doubt": 4.7,
+     "ml": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01"
+    ],
+    "per_topic_rating": {
+     "ML System Design": 4.6,
+     "ML Coding": 4.9,
+     "doubt": 4.7,
+     "ml": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01"
+    ],
+    "per_topic_rating": {
+     "ML System Design": 4.6,
+     "ML Coding": 4.9,
+     "doubt": 4.7,
+     "ml": 4.8
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T08",
+  "name": "Sameer Khan",
+  "subject": "ML",
+  "subjects": [
+   "ML"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "ML Coding",
+   "Statistics & Probability"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 6,
+  "timezone": "Asia/Kolkata",
+  "city": "Delhi",
+  "rating": 4.5,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "06:30",
+    "end_utc": "14:30",
+    "local": "12:00\u201320:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Prefers late slots; asked for fewer doubt sessions.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01",
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.6,
+     "Statistics & Probability": 4.4,
+     "doubt": 4.4,
+     "ml": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01",
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.6,
+     "Statistics & Probability": 4.4,
+     "doubt": 4.4,
+     "ml": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01",
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.6,
+     "Statistics & Probability": 4.4,
+     "doubt": 4.4,
+     "ml": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-01",
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.6,
+     "Statistics & Probability": 4.4,
+     "doubt": 4.4,
+     "ml": 4.5
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T09",
+  "name": "Divya Pillai",
+  "subject": "ML",
+  "subjects": [
+   "ML"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "MLOps",
+   "ML System Design"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "America/Los_Angeles",
+  "city": "San Francisco",
+  "rating": 4.6,
+  "preferred": 3,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Wed",
+    "start_utc": "01:00",
+    "end_utc": "06:00",
+    "local": "18:00\u201323:00 America/Los_Angeles"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "01:00",
+    "end_utc": "06:00",
+    "local": "18:00\u201323:00 America/Los_Angeles"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "01:00",
+    "end_utc": "06:00",
+    "local": "18:00\u201323:00 America/Los_Angeles"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "01:00",
+    "end_utc": "06:00",
+    "local": "18:00\u201323:00 America/Los_Angeles"
+   },
+   {
+    "weekday": "Mon",
+    "start_utc": "01:00",
+    "end_utc": "06:00",
+    "local": "18:00\u201323:00 America/Los_Angeles"
+   }
+  ],
+  "preference_notes": "Works from San Francisco; only overlaps IST mornings.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "MLOps": 4.4,
+     "ML System Design": 4.4,
+     "doubt": 4.5,
+     "ml": 4.6
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "MLOps": 4.4,
+     "ML System Design": 4.4,
+     "doubt": 4.5,
+     "ml": 4.6
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "MLOps": 4.4,
+     "ML System Design": 4.4,
+     "doubt": 4.5,
+     "ml": 4.6
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "ML-02"
+    ],
+    "per_topic_rating": {
+     "MLOps": 4.4,
+     "ML System Design": 4.4,
+     "doubt": 4.5,
+     "ml": 4.6
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T10",
+  "name": "Aditya Verma",
+  "subject": "AI",
+  "subjects": [
+   "AI"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "LLM App Design",
+   "Agentic Patterns"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Bengaluru",
+  "rating": 4.9,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "14:30",
+    "local": "08:00\u201320:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Enjoys agentic patterns; prefers online mode and AI-01.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "LLM App Design": 4.7,
+     "Agentic Patterns": 4.7,
+     "doubt": 4.8,
+     "ai": 4.9
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "LLM App Design": 4.7,
+     "Agentic Patterns": 4.7,
+     "doubt": 4.8,
+     "ai": 4.9
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "LLM App Design": 4.7,
+     "Agentic Patterns": 4.7,
+     "doubt": 4.8,
+     "ai": 4.9
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "LLM App Design": 4.7,
+     "Agentic Patterns": 4.7,
+     "doubt": 4.8,
+     "ai": 4.9
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T11",
+  "name": "Meera Joshi",
+  "subject": "AI",
+  "subjects": [
+   "AI"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "RAG & Retrieval",
+   "Prompt & Eval Systems"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 2,
+  "timezone": "Europe/London",
+  "city": "London",
+  "rating": 4.6,
+  "preferred": 4,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "08:00",
+    "end_utc": "15:00",
+    "local": "09:00\u201316:00 Europe/London"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "08:00",
+    "end_utc": "15:00",
+    "local": "09:00\u201316:00 Europe/London"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "08:00",
+    "end_utc": "15:00",
+    "local": "09:00\u201316:00 Europe/London"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "08:00",
+    "end_utc": "15:00",
+    "local": "09:00\u201316:00 Europe/London"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "08:00",
+    "end_utc": "15:00",
+    "local": "09:00\u201316:00 Europe/London"
+   }
+  ],
+  "preference_notes": "Works from London; only overlaps IST afternoons and evenings.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "RAG & Retrieval": 4.5,
+     "Prompt & Eval Systems": 4.5,
+     "doubt": 4.5,
+     "ai": 4.6
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "RAG & Retrieval": 4.5,
+     "Prompt & Eval Systems": 4.5,
+     "doubt": 4.5,
+     "ai": 4.6
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "RAG & Retrieval": 4.5,
+     "Prompt & Eval Systems": 4.5,
+     "doubt": 4.5,
+     "ai": 4.6
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [],
+    "per_topic_rating": {
+     "RAG & Retrieval": 4.5,
+     "Prompt & Eval Systems": 4.5,
+     "doubt": 4.5,
+     "ai": 4.6
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T12",
+  "name": "Karan Bose",
+  "subject": "AI",
+  "subjects": [
+   "AI"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Prompt & Eval Systems",
+   "LLM App Design"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 5,
+  "timezone": "Asia/Kolkata",
+  "city": "Kolkata",
+  "rating": 4.3,
+  "preferred": 4,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "04:30",
+    "end_utc": "14:30",
+    "local": "10:00\u201320:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "04:30",
+    "end_utc": "10:30",
+    "local": "10:00\u201316:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Flexible on timing; likes prompt and evaluation topics.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01"
+    ],
+    "per_topic_rating": {
+     "Prompt & Eval Systems": 4.1,
+     "LLM App Design": 4.4,
+     "doubt": 4.2,
+     "ai": 4.3
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01"
+    ],
+    "per_topic_rating": {
+     "Prompt & Eval Systems": 4.1,
+     "LLM App Design": 4.4,
+     "doubt": 4.2,
+     "ai": 4.3
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01"
+    ],
+    "per_topic_rating": {
+     "Prompt & Eval Systems": 4.1,
+     "LLM App Design": 4.4,
+     "doubt": 4.2,
+     "ai": 4.3
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01"
+    ],
+    "per_topic_rating": {
+     "Prompt & Eval Systems": 4.1,
+     "LLM App Design": 4.4,
+     "doubt": 4.2,
+     "ai": 4.3
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T13",
+  "name": "Sneha Reddy",
+  "subject": "PM",
+  "subjects": [
+   "PM"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Product Sense",
+   "Execution & Metrics"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Chennai",
+  "rating": 4.7,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Prefers product sense sessions; strong with PM-01.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01",
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Product Sense": 4.7,
+     "Execution & Metrics": 4.8,
+     "doubt": 4.6,
+     "pm": 4.7
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01",
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Product Sense": 4.7,
+     "Execution & Metrics": 4.8,
+     "doubt": 4.6,
+     "pm": 4.7
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01",
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Product Sense": 4.7,
+     "Execution & Metrics": 4.8,
+     "doubt": 4.6,
+     "pm": 4.7
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01",
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Product Sense": 4.7,
+     "Execution & Metrics": 4.8,
+     "doubt": 4.6,
+     "pm": 4.7
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T14",
+  "name": "Rahul Desai",
+  "subject": "PM",
+  "subjects": [
+   "PM",
+   "DSA"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Behavioral & Leadership",
+   "Arrays & Strings"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 7,
+  "timezone": "Asia/Kolkata",
+  "city": "Pune",
+  "rating": 4.4,
+  "preferred": 4,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "02:30",
+    "end_utc": "12:30",
+    "local": "08:00\u201318:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "02:30",
+    "end_utc": "08:30",
+    "local": "08:00\u201314:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Teaches behavioural PM and DSA arrays; prefers a lighter week.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Behavioral & Leadership": 4.3,
+     "Arrays & Strings": 4.3,
+     "doubt": 4.3,
+     "pm": 4.4,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Behavioral & Leadership": 4.3,
+     "Arrays & Strings": 4.3,
+     "doubt": 4.3,
+     "pm": 4.4,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Behavioral & Leadership": 4.3,
+     "Arrays & Strings": 4.3,
+     "doubt": 4.3,
+     "pm": 4.4,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-02"
+    ],
+    "per_topic_rating": {
+     "Behavioral & Leadership": 4.3,
+     "Arrays & Strings": 4.3,
+     "doubt": 4.3,
+     "pm": 4.4,
+     "dsa": 4.4
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T15",
+  "name": "Ishita Ghosh",
+  "subject": "PM",
+  "subjects": [
+   "PM"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "Program Strategy",
+   "Product Sense"
+  ],
+  "training_level": 3,
+  "level": "advanced",
+  "to_upgrade": 0,
+  "timezone": "Asia/Kolkata",
+  "city": "Bengaluru",
+  "rating": 4.8,
+  "preferred": 4,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "03:30",
+    "end_utc": "13:30",
+    "local": "09:00\u201319:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "03:30",
+    "end_utc": "13:30",
+    "local": "09:00\u201319:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "03:30",
+    "end_utc": "13:30",
+    "local": "09:00\u201319:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "03:30",
+    "end_utc": "13:30",
+    "local": "09:00\u201319:00 Asia/Kolkata"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "03:30",
+    "end_utc": "13:30",
+    "local": "09:00\u201319:00 Asia/Kolkata"
+   }
+  ],
+  "preference_notes": "Prefers programme strategy; finds early mornings hard.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01"
+    ],
+    "per_topic_rating": {
+     "Program Strategy": 4.8,
+     "Product Sense": 4.9,
+     "doubt": 4.7,
+     "pm": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01"
+    ],
+    "per_topic_rating": {
+     "Program Strategy": 4.8,
+     "Product Sense": 4.9,
+     "doubt": 4.7,
+     "pm": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01"
+    ],
+    "per_topic_rating": {
+     "Program Strategy": 4.8,
+     "Product Sense": 4.9,
+     "doubt": 4.7,
+     "pm": 4.8
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "PM-01"
+    ],
+    "per_topic_rating": {
+     "Program Strategy": 4.8,
+     "Product Sense": 4.9,
+     "doubt": 4.7,
+     "pm": 4.8
+    },
+    "post_session_rating": null
+   }
+  ]
+ },
+ {
+  "id": "T16",
+  "name": "Farhan Sheikh",
+  "subject": "ML",
+  "subjects": [
+   "ML",
+   "AI"
+  ],
+  "sub_specialty": null,
+  "topics": [
+   "ML Coding",
+   "RAG & Retrieval"
+  ],
+  "training_level": 2,
+  "level": "intermediate",
+  "to_upgrade": 3,
+  "timezone": "Asia/Dubai",
+  "city": "Dubai",
+  "rating": 4.5,
+  "preferred": 5,
+  "leave": null,
+  "weekly_availability": [
+   {
+    "weekday": "Mon",
+    "start_utc": "06:00",
+    "end_utc": "15:00",
+    "local": "10:00\u201319:00 Asia/Dubai"
+   },
+   {
+    "weekday": "Tue",
+    "start_utc": "06:00",
+    "end_utc": "15:00",
+    "local": "10:00\u201319:00 Asia/Dubai"
+   },
+   {
+    "weekday": "Wed",
+    "start_utc": "06:00",
+    "end_utc": "15:00",
+    "local": "10:00\u201319:00 Asia/Dubai"
+   },
+   {
+    "weekday": "Thu",
+    "start_utc": "06:00",
+    "end_utc": "15:00",
+    "local": "10:00\u201319:00 Asia/Dubai"
+   },
+   {
+    "weekday": "Fri",
+    "start_utc": "06:00",
+    "end_utc": "15:00",
+    "local": "10:00\u201319:00 Asia/Dubai"
+   },
+   {
+    "weekday": "Sat",
+    "start_utc": "06:00",
+    "end_utc": "13:00",
+    "local": "10:00\u201317:00 Asia/Dubai"
+   }
+  ],
+  "preference_notes": "Based in Dubai; available IST late morning to evening only.",
+  "history": [
+   {
+    "week": "2026-W32",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01",
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.3,
+     "RAG & Retrieval": 4.3,
+     "doubt": 4.4,
+     "ml": 4.5,
+     "ai": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W33",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01",
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.3,
+     "RAG & Retrieval": 4.3,
+     "doubt": 4.4,
+     "ml": 4.5,
+     "ai": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W34",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01",
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.3,
+     "RAG & Retrieval": 4.3,
+     "doubt": 4.4,
+     "ml": 4.5,
+     "ai": 4.5
+    },
+    "post_session_rating": null
+   },
+   {
+    "week": "2026-W35",
+    "sessions_taught": 4,
+    "batches": [
+     "AI-01",
+     "AI-02"
+    ],
+    "per_topic_rating": {
+     "ML Coding": 4.3,
+     "RAG & Retrieval": 4.3,
+     "doubt": 4.4,
+     "ml": 4.5,
+     "ai": 4.5
+    },
+    "post_session_rating": null
+   }
+  ]
+ }
+]

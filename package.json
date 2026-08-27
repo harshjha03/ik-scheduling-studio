@@ -1,0 +1,27 @@
+{
+  "name": "sme-scheduler",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev",
+    "dev:api": "uvicorn api.index:app --reload --port 8000",
+    "llm:check": "python scripts/llm_check.py",
+    "test:flows": "node scripts/flow_test.js",
+    "build": "next build",
+    "start": "next start",
+    "test": "pytest -q"
+  },
+  "dependencies": {
+    "next": "16.3.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^24",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5"
+  }
+}
