@@ -970,3 +970,37 @@ def test_the_shipped_roster_has_no_window_on_the_wrong_day():
                     if dt.combine((monday + td(days=d)).date(), tm.fromisoformat(local_from), tz)
                     .astimezone(ZoneInfo("UTC")).strftime("%a") == w["weekday"]]
             assert hits, f"{s['id']} {w}"
+
+
+def test_a_scope_the_credentials_never_had_degrades_instead_of_500ing(monkeypatch):
+    """Measured against real credentials: asking for calendar.readonly alongside the write scope is
+    refused with invalid_scope when the refresh token was consented for calendar only. That happened
+    inside the token refresh, outside the try, so the sync raised into the route."""
+    import engine.channels as C
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", '{"type":"service_account"}')
+    monkeypatch.setenv("GOOGLE_CALENDAR_ID", "cohort@group.calendar.google.com")
+    monkeypatch.delenv("PUBLISH_DISABLED", raising=False)
+
+    def refuses(scopes=None):
+        raise RuntimeError("invalid_scope: Bad Request")
+    monkeypatch.setattr(C, "_google_token", refuses)
+
+    roster, res = C.sync_availability([{**sme("A"), "email": "a@ik.example"}],
+                                      "2026-09-07T00:00:00Z", "2026-09-14T00:00:00Z")
+    assert res["count"] == 0 and roster[0]["external_busy"] == []
+    assert res["status"] == "sent", "credentials are present, so this is a live sync that found nothing"
+    assert C.read_freebusy(["a@ik.example"], "2026-09-07T00:00:00Z", "2026-09-14T00:00:00Z") == {}
+
+
+def test_freebusy_asks_only_for_the_scope_the_credentials_already_have():
+    """The full calendar scope covers freebusy, so the sync needs no second consent screen."""
+    import engine.channels as C
+    asked = []
+    real = C._google_token
+    C._google_token = lambda scopes=None: (asked.append(tuple(scopes or [])), "tok")[1]
+    try:
+        C.read_freebusy(["a@ik.example"], "2026-09-07T00:00:00Z", "2026-09-14T00:00:00Z",
+                        api=lambda body: {"calendars": {}})
+    finally:
+        C._google_token = real
+    assert asked == [] or asked == [(C.CAL_SCOPE,)], asked

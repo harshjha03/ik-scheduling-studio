@@ -194,6 +194,8 @@ def _disabled() -> str | None:
 
 CAL_SCOPE = "https://www.googleapis.com/auth/calendar"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+# Only needed for a narrower grant (a service account that reads but never writes); the full calendar
+# scope already covers freebusy, so the sync asks for that and needs no second consent.
 CAL_READ_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 FREEBUSY_MAX = 50          # Google's per-request calendar cap
 
@@ -323,16 +325,21 @@ def read_freebusy(emails: list[str], start_utc: str, end_utc: str, api=None) -> 
     targets = list(dict.fromkeys(e.strip() for e in emails if e and "@" in e))[:FREEBUSY_MAX]
     if not (ready and targets):
         return {}
-    if api is None:
-        token = _google_token([CAL_SCOPE, CAL_READ_SCOPE])
-
-        def api(body: dict) -> dict:                                     # noqa: E306
-            return _post("https://www.googleapis.com/calendar/v3/freeBusy", body,
-                         {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     try:
+        if api is None:
+            # The write scope already grants freebusy reads, so this needs no extra consent. Asking
+            # for calendar.readonly *alongside* it is refused outright (invalid_scope) when the
+            # refresh token was consented for calendar only — which is the common case here.
+            token = _google_token([CAL_SCOPE])
+
+            def api(body: dict) -> dict:                                 # noqa: E306
+                return _post("https://www.googleapis.com/calendar/v3/freeBusy", body,
+                             {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
         got = api({"timeMin": start_utc, "timeMax": end_utc, "items": [{"id": e} for e in targets]})
     except Exception:
-        return {}                     # a failed read must degrade to "nothing synced", never to a crash
+        # Includes the token refresh: a scope the credentials were never granted must degrade to
+        # "nothing synced", the same as no credentials at all, never to a 500.
+        return {}
     out: dict[str, list[dict]] = {}
     for email, cal in (got.get("calendars") or {}).items():
         out[email] = [{"start_utc": b["start"], "end_utc": b["end"]}
