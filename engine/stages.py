@@ -13,6 +13,9 @@ FAIRNESS_BAND = 2
 PAST_WEEKS_FOR_LOAD = 3
 OVERRIDE_PENALTY = -0.2
 OVERRIDE_BONUS = 0.1
+# Enough that a pick which would push an SME outside the band loses to any candidate that would not:
+# the largest legitimate advantage a candidate can hold is continuity (0.3) plus performance (0.2).
+FAIRNESS_PENALTY = -0.5
 
 # code -> (priority, severity). Sort/color by priority.
 FLAG_TABLE = {
@@ -240,7 +243,14 @@ def subject_pool(smes: list[dict], subject: str) -> list[dict]:
 
 def stage_b_score(session: dict, survivors: list[dict], smes: list[dict], hist: dict,
                   draft_counts: dict, adjust: dict | None = None) -> list[dict]:
-    """score = 0.5*fairness + 0.3*continuity + 0.2*performance (+ override adjustment). Sorted desc."""
+    """score = 0.5*fairness + 0.3*continuity + 0.2*performance (+ override adjustment, + fairness
+    penalty). Sorted desc.
+
+    The fairness penalty is what keeps the draft from creating violations it then reports: a pick that
+    would push an SME outside mean ± FAIRNESS_BAND is demoted below every pick that would not, so the
+    breaching candidate is only chosen when there is no alternative. It stays a term in the score
+    rather than a hard tier, so the number the UI shows still explains the order it chose.
+    """
     adjust = adjust or {}
     pool = subject_pool(smes, session["subject"])
     loads = {s["id"]: projected_load(s["id"], hist, draft_counts) for s in pool}
@@ -255,11 +265,15 @@ def stage_b_score(session: dict, survivors: list[dict], smes: list[dict], hist: 
         continuity = 1.0 if session["batch_id"] in taught_batches(weeks) else 0.0
         performance = topic_rating(weeks, topic) / 5
         adj = adjust.get((sme["id"], session["batch_id"]), 0.0)
-        score = 0.5 * fairness + 0.3 * continuity + 0.2 * performance + adj
+        breach = fairness_band_breach(sme["id"], session["subject"], smes, hist, draft_counts)
+        penalty = FAIRNESS_PENALTY if breach else 0.0
+        score = 0.5 * fairness + 0.3 * continuity + 0.2 * performance + adj + penalty
         out.append({
             "sme_id": sme["id"], "name": sme["name"], "score": round(score, 4),
+            "breaches_fairness": breach,
             "components": {"fairness": round(fairness, 4), "continuity": continuity,
-                           "performance": round(performance, 4), "adjustment": adj},
+                           "performance": round(performance, 4), "adjustment": adj,
+                           "fairness_penalty": penalty},
         })
     out.sort(key=lambda c: (-c["score"], c["sme_id"]))
     return out
@@ -325,18 +339,30 @@ def stage_d_validate(rows: list[dict], smes: list[dict], hist: dict) -> list[dic
             if row["subject"] != subject or sid not in loads:
                 continue  # flag a row once, against its own session's pool
             if abs(loads[sid] - m) > FAIRNESS_BAND:
+                # Say which tail. Three of this week's five flags are SMEs *below* the mean, and
+                # reading those as "overworked" is the opposite of what they say.
+                delta = loads[sid] - m
+                side = "above" if delta > 0 else "below"
                 row["flags"].append(make_flag(
                     "FAIRNESS_VIOLATION", row["session_id"],
-                    f"{by_id[sid]['name']} at {loads[sid]} sessions over 4 weeks vs. pool mean {m:.1f}.", sid))
+                    f"{by_id[sid]['name']} at {loads[sid]} sessions over 4 weeks — "
+                    f"{abs(delta):.1f} {side} the {subject} pool mean of {m:.1f}.", sid))
     return rows
 
 
 def fairness_band_breach(sme_id: str, subject: str, smes: list[dict], hist: dict, counts: dict) -> bool:
-    """Would assigning one more session to sme_id put them outside mean ± 2 for their pool?"""
+    """Would assigning one more session push sme_id *above* mean + 2 for their pool?
+
+    One-sided on purpose. The band is symmetric when reporting a skewed week (Stage D flags both
+    tails), but for deciding an assignment only the upper tail is a reason not to pick someone: being
+    under the mean is the problem giving them work fixes. Two-sided here froze the lightest-loaded
+    SMEs out — the penalty demoted them for being light, so they stayed light, so they kept tripping
+    it. The UI has always called this "above fairness band", which is this meaning.
+    """
     pool = subject_pool(smes, subject)
     loads = {s["id"]: projected_load(s["id"], hist, counts) for s in pool}
     loads[sme_id] = loads.get(sme_id, 0) + 1
-    return abs(loads[sme_id] - mean(loads.values())) > FAIRNESS_BAND
+    return loads[sme_id] - mean(loads.values()) > FAIRNESS_BAND
 
 
 # ---------- Stage E ----------

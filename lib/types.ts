@@ -124,6 +124,8 @@ export interface Components {
   continuity: number;
   performance: number;
   adjustment: number;
+  /** negative when this pick would push the SME above mean + the fairness band */
+  fairness_penalty?: number;
 }
 
 export interface Candidate {
@@ -201,7 +203,12 @@ export interface RunResult {
     unfilled: number;
     flags_by_severity: Partial<Record<Severity, number>>;
     flags_by_code: Partial<Record<FlagCode, number>>;
+    /** 4-week projected load spread per pool — the metric of record */
     fairness_spread_per_subject: Record<string, number>;
+    /** how much of that spread the week arrived with, and cannot change */
+    fairness_inherited_per_subject?: Record<string, number>;
+    /** the spread this week's assignment actually contributed */
+    fairness_assigned_per_subject?: Record<string, number>;
     llm: LlmStats;
   };
 }

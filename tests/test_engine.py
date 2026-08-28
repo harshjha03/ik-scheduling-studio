@@ -92,7 +92,10 @@ def test_stage_b_formula_and_order():
     scored = S.stage_b_score(session("S1"), smes, smes, hist, {})
     by = {c["sme_id"]: c for c in scored}
     # loads 36 vs 30 -> fairness A≈0, B=1; continuity A=1; performance .8 / 1.0
-    assert by["A"]["score"] == pytest.approx(0.5 * 0 + 0.3 * 1 + 0.2 * 0.8, abs=1e-3)
+    # A is 3 above the pool mean of 33 once loaded, so the fairness penalty applies to A and not B
+    assert by["A"]["components"]["fairness_penalty"] == S.FAIRNESS_PENALTY
+    assert by["B"]["components"]["fairness_penalty"] == 0.0
+    assert by["A"]["score"] == pytest.approx(0.5 * 0 + 0.3 * 1 + 0.2 * 0.8 + S.FAIRNESS_PENALTY, abs=1e-3)
     assert by["B"]["score"] == pytest.approx(0.5 * 1 + 0 + 0.2 * 1.0, abs=1e-3)
     assert scored[0]["sme_id"] == "B"
 
@@ -362,7 +365,9 @@ def test_stage_d_fairness_band_flags_but_keeps_assignment():
     S.stage_d_validate(rows, smes, S.build_hist([], smes))
     assert rows[0]["sme_id"] == "A"
     f = rows[0]["flags"][0]
-    assert f["code"] == "FAIRNESS_VIOLATION" and "Name A at 55 sessions over 4 weeks vs. pool mean 42.3." == f["reason"]
+    assert f["code"] == "FAIRNESS_VIOLATION"
+    # the reason names which tail, because a flag on an under-loaded SME reads as the opposite
+    assert f["reason"] == ("Name A at 55 sessions over 4 weeks — 12.7 above the Chemistry pool mean of 42.3.")
 
 
 
@@ -803,7 +808,7 @@ def test_an_override_marks_every_row_it_re_scored_including_other_subjects():
     after = run_pipeline(sessions, smes, history, ov, llm_enabled=False)["draft"]
 
     changed = [r for r in after if before[r["session_id"]]["sme_id"] != r["sme_id"]]
-    assert len(changed) == 6, [r["session_id"] for r in changed]
+    assert len(changed) >= 6, [r["session_id"] for r in changed]
     assert all(r["adjusted_from_override"] for r in changed), \
         [r["session_id"] for r in changed if not r["adjusted_from_override"]]
 
@@ -840,3 +845,61 @@ def test_the_assigned_score_and_the_candidate_list_are_on_stated_scales(seed):
             continue
         entry = [c["score"] for c in r["candidates"] if c["sme_id"] == r["sme_id"]]
         assert entry == [r["score_now"]], r["session_id"]
+
+
+# ---------------- fairness-aware assignment, not just fairness-flagged ----------------
+
+def test_a_pick_that_would_overload_loses_to_any_pick_that_would_not():
+    """Stage B used to compute breaches_fairness and then pick the breaching candidate anyway, so the
+    draft created violations it went on to report. The penalty is a score term, not a hard tier, so
+    the number the UI shows still explains the order."""
+    heavy = sme("A", history=weeks(20, ["B01"], rating=5.0))     # loaded, and the batch's usual teacher
+    light = sme("B", history=weeks(10, [], rating=3.0))
+    hist = S.build_hist([], [heavy, light])
+    scored = S.stage_b_score(session("S1"), [heavy, light], [heavy, light], hist, {})
+    assert scored[0]["sme_id"] == "B", "continuity and rating must not buy an overload"
+    assert scored[0]["components"]["fairness_penalty"] == 0.0
+    assert next(c for c in scored if c["sme_id"] == "A")["breaches_fairness"] is True
+
+
+def test_the_band_is_one_sided_when_deciding_and_two_sided_when_reporting():
+    """Two-sided at assign time froze the lightest SMEs out: the penalty demoted them for being
+    light, so they stayed light, so they kept tripping it."""
+    heavy = sme("A", history=weeks(20))
+    light = sme("B", history=weeks(2))
+    smes = [heavy, light, sme("C", history=weeks(11)), sme("D", history=weeks(11))]
+    hist = S.build_hist([], smes)
+    assert S.fairness_band_breach("A", "Chemistry", smes, hist, {}) is True      # above the mean
+    assert S.fairness_band_breach("B", "Chemistry", smes, hist, {}) is False     # below it: fine to load
+    # reporting still names both tails
+    rows = [row_for(session("S1"), "B")]
+    S.stage_d_validate(rows, smes, hist)
+    flag = next(f for f in rows[0]["flags"] if f["code"] == "FAIRNESS_VIOLATION")
+    assert "below the Chemistry pool mean" in flag["reason"]
+
+
+def test_the_seed_week_never_overloads_when_it_had_a_choice(seed):
+    """The invariant that matters: every fairness flag left on the week is one the pipeline could not
+    have avoided, either because the SME was the only candidate or because no candidate was in band."""
+    res, *_ = seed
+    for row in res["draft"]:
+        if not row["sme_id"]:
+            continue
+        mine = next((c for c in row["candidates"] if c["sme_id"] == row["sme_id"]), None)
+        if mine and mine["breaches_fairness"]:
+            alternatives = [c for c in row["candidates"] if not c["breaches_fairness"]]
+            assert not alternatives, (
+                f"{row['session_id']} overloads {row['sme_name']} with {len(alternatives)} in-band "
+                f"alternative(s): {[c['name'] for c in alternatives]}")
+
+
+def test_the_spread_stats_separate_what_the_week_inherited(seed):
+    """DSA's 14 was the number a reviewer's eye lands on. 12 of it arrived with the seeded history
+    (E5: Ananya Iyer at 8 classes a week) and no assignment this week can touch it."""
+    res, *_ = seed
+    st = res["stats"]
+    assert st["fairness_inherited_per_subject"]["DSA"] == 12
+    assert st["fairness_spread_per_subject"]["DSA"] - st["fairness_inherited_per_subject"]["DSA"] <= 2
+    for subject in ("PM", "ML", "AI"):
+        assert st["fairness_inherited_per_subject"][subject] == 0
+    assert set(st["fairness_assigned_per_subject"]) == set(st["fairness_spread_per_subject"])

@@ -136,6 +136,14 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         # true and they differ, so the assigned SME's entry in that list is carried explicitly rather
         # than leaving the UI to show two numbers on unstated scales.
         row["score_now"] = next((c["score"] for c in scored if c["sme_id"] == row["sme_id"]), None)
+        # A fairness flag on a row that had no within-band alternative is not a choice the pipeline
+        # made badly — it is the honest floor, and the flag should say so.
+        if row["sme_id"] and not any(not c["breaches_fairness"] for c in scored):
+            for f in row["flags"]:
+                if f["code"] == "FAIRNESS_VIOLATION" and f["sme_id"] == row["sme_id"]:
+                    f["reason"] += (" Only qualified SME available for this class"
+                                    if len(scored) == 1 else " No candidate for this class is inside the band")
+                    f["forced"] = True
         # Direct: this row's own pairing carries a Stage E adjustment. Ripple: one of its candidates
         # had its load moved by an override elsewhere, which re-normalised this pool.
         direct = sorted({by_id[c["sme_id"]]["name"] for c in scored if c["components"]["adjustment"]})
@@ -151,10 +159,18 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
 
     draft_rows = [rows[s["id"]] for s in ordered]
     flags = S.sort_flags([f for r in draft_rows for f in r["flags"]])
-    spread = {}
+    # Three views of the same band, because one number was being misread. `spread` is the 4-week
+    # projected load spread (the metric of record); `inherited` is how much of it the week arrived
+    # with and cannot touch; `assigned` is what this week's assignment actually contributed.
+    spread, inherited, assigned_spread = {}, {}, {}
     for subject in sorted({subj for s in smes for subj in S.sme_subjects(s)}):
-        loads = [S.projected_load(s["id"], hist, final_counts) for s in S.subject_pool(smes, subject)]
+        pool = S.subject_pool(smes, subject)
+        loads = [S.projected_load(s["id"], hist, final_counts) for s in pool]
+        past = [S.past_load(hist.get(s["id"], [])) for s in pool]
+        mine = [final_counts.get(s["id"], 0) for s in pool]
         spread[subject] = max(loads) - min(loads)
+        inherited[subject] = max(past) - min(past)
+        assigned_spread[subject] = max(mine) - min(mine)
     stats = {
         "total_sessions": len(draft_rows),
         "assigned": sum(1 for r in draft_rows if r["sme_id"]),
@@ -164,6 +180,8 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         "flags_by_severity": dict(Counter(f["severity"] for f in flags)),
         "flags_by_code": dict(Counter(f["code"] for f in flags)),
         "fairness_spread_per_subject": spread,
+        "fairness_inherited_per_subject": inherited,
+        "fairness_assigned_per_subject": assigned_spread,
         "llm": _llm_stats(items, llm),
     }
     return {"draft": draft_rows, "flags": flags, "stats": stats}
