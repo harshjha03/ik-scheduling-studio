@@ -1407,7 +1407,19 @@ export default function Page() {
               value: r.stage === "llm" ? `LLM tie-break${run?.stats.llm.model ? ` (${run.stats.llm.model})` : ""}`
                 : r.stage === "override" ? "Ops override" : r.stage === "auto" ? "Automatic score" : "—",
             },
-            { label: "Match score", value: r.score !== null ? r.score.toFixed(2) : "—" },
+            {
+              label: "Match score",
+              value: r.score === null ? "—" : (
+                <span title="The first number is what the assignment was decided on. The second re-scores the same teacher against the finished week, which is the scale the list below uses.">
+                  {r.score.toFixed(2)}
+                  {r.score_now !== null && Math.abs(r.score_now - r.score) >= 0.005 && (
+                    <span className="font-normal" style={{ color: "var(--muted)" }}>
+                      {" "}· {r.score_now.toFixed(2)} now
+                    </span>
+                  )}
+                </span>
+              ),
+            },
             {
               label: "Status",
               value: !r.sme_id ? "Unfilled" : pend ? "Change pending SME approval"
@@ -1470,7 +1482,9 @@ export default function Page() {
         )}
         {showList && (
           <div>
-            <SectionLabel>{r.sme_id ? "Choose a different teacher" : "Teachers who could take this class"}</SectionLabel>
+            <SectionLabel>
+              {r.sme_id ? "Choose a different teacher — score if reassigned" : "Teachers who could take this class"}
+            </SectionLabel>
             <div className="flex flex-col gap-[7px]">
               {cands.map((c) => {
                 const level = rosterFor("next").find((s) => s.id === c.sme_id)?.level ?? "";

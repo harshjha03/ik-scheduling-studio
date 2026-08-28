@@ -152,7 +152,10 @@ export interface DraftRow {
   required_training_level: number;
   sme_id: string | null;
   sme_name: string | null;
+  /** the score the assignment was decided on, chronologically against a partly-built draft */
   score: number | null;
+  /** the same SME re-scored against the finished draft — the scale `candidates` is on */
+  score_now: number | null;
   components: Components | null;
   stage: "auto" | "llm" | "override" | null;
   flags: Flag[];

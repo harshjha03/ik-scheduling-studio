@@ -12,7 +12,7 @@ def _base_row(session: dict) -> dict:
                                         "duration_min", "mode", "required_training_level")}
     row.update({"session_id": session["id"], "sme_id": None, "sme_name": None, "score": None,
                 "components": None, "stage": None, "flags": [], "candidates": [], "eliminated": [],
-                "adjusted_from_override": False, "override_effect": None})
+                "adjusted_from_override": False, "override_effect": None, "score_now": None})
     return row
 
 
@@ -130,6 +130,12 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         for c in scored:
             c["breaches_fairness"] = S.fairness_band_breach(c["sme_id"], sess["subject"], smes, hist, own)
         row["candidates"] = scored
+        # The row's `score` is the number the decision was made on, in chronological order against a
+        # partly-built draft. `candidates` is a different snapshot: the finished draft, with this row's
+        # own assignment taken back out, which is what a reassignment would actually score. Both are
+        # true and they differ, so the assigned SME's entry in that list is carried explicitly rather
+        # than leaving the UI to show two numbers on unstated scales.
+        row["score_now"] = next((c["score"] for c in scored if c["sme_id"] == row["sme_id"]), None)
         # Direct: this row's own pairing carries a Stage E adjustment. Ripple: one of its candidates
         # had its load moved by an override elsewhere, which re-normalised this pool.
         direct = sorted({by_id[c["sme_id"]]["name"] for c in scored if c["components"]["adjustment"]})

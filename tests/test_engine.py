@@ -821,3 +821,22 @@ def test_an_override_marks_every_row_it_re_scored_including_other_subjects():
     # a subject the override cannot reach is left alone
     untouched = [r for r in after if r["subject"] not in ("DSA", "PM")]
     assert untouched and all(r["override_effect"] is None for r in untouched)
+
+
+def test_the_assigned_score_and_the_candidate_list_are_on_stated_scales(seed):
+    """The UI showed Kavya Nair assigned at 0.684 while the list had her second at 0.6126 and Rahul
+    top at 0.6363 — the number-two candidate at a score matching neither entry. The two are different
+    snapshots, so the row now carries both and the UI names which is which."""
+    res, *_ = seed
+    row = next(r for r in res["draft"] if r["session_id"] == "W37-DSA-04-1")
+    mine = next(c for c in row["candidates"] if c["sme_id"] == row["sme_id"])
+    assert row["score_now"] == mine["score"], "the row's 'now' score must agree with its own list entry"
+    assert row["score"] != row["score_now"], "and the assign-time score is kept, not overwritten"
+
+    # every staffed row agrees with its own entry, so the contradiction cannot come back anywhere
+    for r in res["draft"]:
+        if not r["sme_id"]:
+            assert r["score_now"] is None
+            continue
+        entry = [c["score"] for c in r["candidates"] if c["sme_id"] == r["sme_id"]]
+        assert entry == [r["score_now"]], r["session_id"]
