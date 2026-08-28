@@ -14,3 +14,7 @@ ik-schedule-*.csv
 .data/
 .vercel
 .env*
+
+# macOS finder metadata — was committed twice by accident
+.DS_Store
+**/.DS_Store
