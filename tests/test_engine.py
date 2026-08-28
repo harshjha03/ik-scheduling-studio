@@ -903,3 +903,70 @@ def test_the_spread_stats_separate_what_the_week_inherited(seed):
     for subject in ("PM", "ML", "AI"):
         assert st["fairness_inherited_per_subject"][subject] == 0
     assert set(st["fairness_assigned_per_subject"]) == set(st["fairness_spread_per_subject"])
+
+
+# ---------------- two latent time bugs the seed data happens to avoid ----------------
+
+def test_an_availability_window_crossing_utc_midnight_matches():
+    """A US-evening SME: 22:00–02:00 UTC is a legal window, and comparing minutes-since-midnight
+    made it match nothing at all. The seed roster has no such window, so every test passed."""
+    us = sme("A", windows=[{"weekday": "Mon", "start_utc": "22:00", "end_utc": "02:00"}])
+    late = session("S1", start="2026-08-31T22:30:00Z")        # Monday 22:30Z, inside the window
+    early = session("S2", start="2026-09-01T00:30:00Z")       # Tuesday 00:30Z, the same window's tail
+    outside = session("S3", start="2026-08-31T20:30:00Z")     # Monday 20:30Z, before it opens
+    assert [s["id"] for s in S.stage_a_hard_filter(late, [us], [])[0]] == ["A"]
+    assert [s["id"] for s in S.stage_a_hard_filter(early, [us], [])[0]] == ["A"]
+    assert S.stage_a_hard_filter(outside, [us], [])[1][0]["rule"] == "availability"
+
+
+def test_a_session_crossing_midnight_needs_the_window_to_cover_both_sides():
+    us = sme("A", windows=[{"weekday": "Mon", "start_utc": "22:00", "end_utc": "02:00"}])
+    inside = session("S1", start="2026-08-31T23:30:00Z")      # 23:30–00:30, spans the boundary
+    assert [s["id"] for s in S.stage_a_hard_filter(inside, [us], [])[0]] == ["A"]
+    tight = sme("B", windows=[{"weekday": "Mon", "start_utc": "22:00", "end_utc": "23:50"}])
+    assert S.stage_a_hard_filter(inside, [tight], [])[1][0]["rule"] == "availability"
+
+
+def test_availability_wraps_from_sunday_into_monday():
+    night = sme("A", windows=[{"weekday": "Sun", "start_utc": "23:00", "end_utc": "01:00"}])
+    mon = session("S1", start="2026-09-07T00:00:00Z")         # Monday 00:00–01:00Z, the window's tail
+    assert [s["id"] for s in S.stage_a_hard_filter(mon, [night], [])[0]] == ["A"]
+    late = session("S2", start="2026-09-07T00:30:00Z")        # 00:30–01:30 runs past the window's end
+    assert S.stage_a_hard_filter(late, [night], [])[1][0]["rule"] == "availability"
+
+
+def test_ordinary_windows_are_unchanged_and_malformed_ones_are_ignored():
+    ok = sme("A")                                            # 01:30–15:30 Mon–Sat
+    assert [s["id"] for s in S.stage_a_hard_filter(session("S1"), [ok], [])[0]] == ["A"]
+    assert S.stage_a_hard_filter(session("S2", start="2026-08-31T16:30:00Z"), [ok], [])[1][0]["rule"] == "availability"
+    junk = sme("B", windows=[{"weekday": "Notaday", "start_utc": "01:30", "end_utc": "15:30"}, {}])
+    assert S.availability_spans(junk) == []                  # ignored, never "free all week"
+    assert S.stage_a_hard_filter(session("S1"), [junk], [])[1][0]["rule"] == "availability"
+
+
+def test_the_generator_labels_a_sunday_utc_window_sunday():
+    """It relabelled Sunday as Monday, which put a teacher's hours at the far end of the week — and
+    it had already happened: T09's Saturday evening in Los Angeles shipped as a Monday window."""
+    import runpy
+    gen = runpy.run_path(os.path.join(ROOT, "scripts", "generate_data.py"), run_name="not_main")
+    to_utc = gen["to_utc_windows"]
+    # Saturday 18:00–23:00 in Los Angeles is Sunday 01:00–06:00 UTC
+    out = to_utc({5: ("18:00", "23:00")}, "America/Los_Angeles", "current")
+    assert [w["weekday"] for w in out] == ["Sun"], out
+    assert to_utc({0: ("09:00", "18:00")}, "Asia/Kolkata", "current")[0]["weekday"] == "Mon"
+
+
+def test_the_shipped_roster_has_no_window_on_the_wrong_day():
+    """Every window's `local` note must agree with the UTC weekday it was written to."""
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as dt, time as tm, timedelta as td
+    monday = dt(2026, 8, 31)                                  # the seed week's Monday
+    for s in rd("smes"):
+        for w in s["weekly_availability"]:
+            local_from = w["local"].split("–")[0]
+            tz = ZoneInfo(w["local"].split()[-1])
+            # find the local day whose start converts to this UTC weekday+time
+            hits = [d for d in range(7)
+                    if dt.combine((monday + td(days=d)).date(), tm.fromisoformat(local_from), tz)
+                    .astimezone(ZoneInfo("UTC")).strftime("%a") == w["weekday"]]
+            assert hits, f"{s['id']} {w}"

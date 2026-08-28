@@ -20,7 +20,11 @@ from engine.run import run_pipeline  # noqa: E402
 
 rng = random.Random(11)
 UTC = timezone.utc
-DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]      # the teaching week: no classes run on Sunday
+# ...but a UTC availability window can legitimately land on Sunday. A Saturday evening in Los Angeles
+# is Sunday morning UTC, and labelling that "Mon" (the old wrap) moved the teacher's hours to the far
+# end of the week. The engine's WEEKDAYS includes Sun, so emit the real day.
+UTC_DAYS = DAYS + ["Sun"]
 HOURS = list(range(8, 20))          # IST teaching hours 08:00–19:00 start
 LEVELS = ["beginner", "intermediate", "advanced"]
 LEVEL_NUM = {name: i + 1 for i, name in enumerate(LEVELS)}
@@ -111,7 +115,7 @@ def to_utc_windows(local: dict, tz: str, week: str) -> list[dict]:
         day = WEEK_START[week] + timedelta(days=d)
         s = datetime.combine(day, time.fromisoformat(win[0]), ZoneInfo(tz)).astimezone(UTC)
         e = datetime.combine(day, time.fromisoformat(win[1]), ZoneInfo(tz)).astimezone(UTC)
-        out.append({"weekday": DAYS[s.weekday()] if s.weekday() < 6 else DAYS[0],
+        out.append({"weekday": UTC_DAYS[s.weekday()],
                     "start_utc": s.strftime("%H:%M"), "end_utc": e.strftime("%H:%M"),
                     "local": f"{win[0]}–{win[1]} {tz}"})
     return out

@@ -74,14 +74,44 @@ def _minutes(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def is_available(sme: dict, start: datetime, end: datetime) -> bool:
-    wd = WEEKDAYS[start.weekday()]
-    s_min = start.hour * 60 + start.minute
-    e_min = s_min + int((end - start).total_seconds() // 60)
+WEEK_MINUTES = 7 * 24 * 60
+
+
+def availability_spans(sme: dict) -> list[tuple[int, int]]:
+    """Working hours as merged minute ranges from Monday 00:00 UTC, laid out over two weeks.
+
+    Comparing minutes-since-midnight per weekday silently never matched a window that crosses UTC
+    midnight — a US-evening SME whose 22:00–02:00 window is perfectly legal read as "never free", and
+    the seed data happens to avoid it, so the tests passed. Absolute minutes handle a crossing window
+    and a crossing session in one place; the second week is there so Sunday->Monday wraps too.
+    """
+    spans: list[tuple[int, int]] = []
     for w in sme.get("weekly_availability", []):
-        if w["weekday"] == wd and _minutes(w["start_utc"]) <= s_min and e_min <= _minutes(w["end_utc"]):
-            return True
-    return False
+        try:
+            base = WEEKDAYS.index(w["weekday"]) * 1440
+            s, e = _minutes(w["start_utc"]), _minutes(w["end_utc"])
+        except (KeyError, ValueError):
+            continue                      # a malformed window is ignored, never treated as all-week
+        if e <= s:                        # 22:00–02:00 runs into the following day
+            e += 1440
+        spans.append((base + s, base + e))
+    spans += [(a + WEEK_MINUTES, b + WEEK_MINUTES) for a, b in spans]
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def is_available(sme: dict, start: datetime, end: datetime) -> bool:
+    a = start.weekday() * 1440 + start.hour * 60 + start.minute
+    b = a + int((end - start).total_seconds() // 60)
+    spans = availability_spans(sme)
+    return any(lo <= a and b <= hi for lo, hi in spans) or \
+        any(lo <= a + WEEK_MINUTES and b + WEEK_MINUTES <= hi for lo, hi in spans)
 
 
 def busy_overlap(block: dict, start: datetime, end: datetime) -> bool:
