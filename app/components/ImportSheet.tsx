@@ -21,6 +21,8 @@ interface Props {
   sheetLive?: boolean;
   sheetDetail?: string;
   sheetBusy?: boolean;
+  /** an extra template download offered alongside the main one (the history contract) */
+  historyAction?: { label: string; onClick: () => void };
   tallies?: ImportTally[] | null;
   issues?: ImportIssue[] | null;
   preview?: ImportPreviewRow[] | null;
@@ -57,7 +59,7 @@ function Section({ label, gap, maxHeight, children }: {
 /** Shared by the class and SME importers — same shape, different rows. */
 export default function ImportSheet({
   steps, stepSize, warnInk, dropTitle, dropSub, onFile, onPullSheet, sheetLive, sheetDetail, sheetBusy,
-  tallies, issues, preview,
+  historyAction, tallies, issues, preview,
 }: Props) {
   return (
     <div className="flex flex-col gap-[13px]">
@@ -119,6 +121,11 @@ export default function ImportSheet({
                 {sheetBusy ? "Pulling…" : "Pull from Sheet"}
               </button>
             </div>
+          )}
+          {historyAction && (
+            <button className="btn-quiet self-start text-[11.5px]" onClick={historyAction.onClick}>
+              {historyAction.label}
+            </button>
           )}
         </>
       )}

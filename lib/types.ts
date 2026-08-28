@@ -328,6 +328,10 @@ export interface Profile {
   preferred: string;
 }
 
+/** Where each dataset in front of the coordinator actually came from, and when. */
+export interface DatasetOrigin { source: string; at: string; rows?: number }
+export type DataProvenance = Record<string, DatasetOrigin>;
+
 // ---- Recovery & Review Copilot ----
 
 export type AgentMode = "recovery" | "review" | "chat";

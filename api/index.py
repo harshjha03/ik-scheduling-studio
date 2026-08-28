@@ -17,6 +17,7 @@ from engine.llm import llm_configured, llm_provider  # noqa: E402
 dotenv.load(os.path.join(ROOT, ".env.local"))
 dotenv.load(os.path.join(ROOT, ".env"))
 from engine import channels  # noqa: E402
+from engine import ingest  # noqa: E402
 from engine import sheets  # noqa: E402
 from engine import stages as S  # noqa: E402
 from engine import tools  # noqa: E402
@@ -70,12 +71,27 @@ def integrations():
 
 @app.post("/api/sheets/pull")
 def sheets_pull(body: dict = Body(...)):
-    """One tab as CSV text. The frontend parses it with the same validator a file upload uses, so
-    there is exactly one column contract and one place row errors are worded."""
+    """One dataset as CSV text, from whichever source is configured — a Google Sheet tab if there is
+    one, the bundled seed data otherwise. The frontend parses it with the same validator a file
+    upload uses, so there is exactly one column contract and one place row errors are worded.
+
+    `dataset` is sessions | smes | history. `tab` still works and pins the sheet tab directly.
+    """
+    dataset = (body.get("dataset") or "").strip().lower()
     tab = (body.get("tab") or "").strip()
-    if not tab:
-        raise HTTPException(422, "`tab` is required (the sheet tab to read)")
-    return sheets.read_tab(body.get("spreadsheet_id"), tab)
+    if not dataset and not tab:
+        raise HTTPException(422, "`dataset` (sessions | smes | history) or `tab` is required")
+    if dataset and dataset not in ingest.DATASETS:
+        raise HTTPException(422, f"unknown dataset `{dataset}`; use one of {', '.join(ingest.DATASETS)}")
+    if not dataset:
+        return sheets.read_tab(body.get("spreadsheet_id"), tab)
+    src = ingest.pick_source(body.get("spreadsheet_id"), prefer=body.get("source"))
+    if tab and isinstance(src, ingest.SheetSource):
+        src.tabs[dataset] = tab
+    res = src.fetch(dataset)
+    res["dataset"] = dataset
+    res["synced_at"] = store_now()
+    return res
 
 
 @app.post("/api/sheets/push")
@@ -159,6 +175,11 @@ def put_schedule(body: dict = Body(...)):
     payload = {k: v for k, v in body.items() if k != "week"}
     store().save_schedule(body["week"], payload)
     return {"saved": body["week"], "rows": len(body["draft"]), "storage": store().info()}
+
+
+def store_now() -> str:
+    from engine.store import now
+    return now()
 
 
 # ---------- Recovery & Review Copilot ----------

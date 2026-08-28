@@ -718,6 +718,45 @@ async function features(ev, wait, settle, b) {
   const joined = await ev(`return { onRoster: has("Meera Krishnan"), closed: !sheet() };`);
   ok(joined.onRoster && joined.closed, "the imported SME joins the roster straight away", joined);
 
+  console.log("\n=== FEATURES: ingest — pull the roster from the configured source ===");
+  await ev(`clickPart("button", "Import SMEs"); return true;`);
+  await wait(`return !!byPart('[role="dialog"] button', "Pull from Sheet")`, "the SME importer", 15000);
+  const pull0 = await ev(`const t = sheetText() || ""; return {
+    control: !!byPart('[role="dialog"] button', "Pull from Sheet"),
+    labelled: /Live ·|Simulated ·/.test(t),
+    histStep: /Assignment history/.test(t), histTemplate: !!byPart('[role="dialog"] button', "Download history template") };`);
+  ok(pull0.control && pull0.labelled, "the importer offers a pull, labelled live or simulated", pull0);
+  ok(pull0.histStep && pull0.histTemplate, "and names the history contract with its own template", pull0);
+
+  await ev(`clickPart('[role="dialog"] button', "Pull from Sheet"); return true;`);
+  const pulled = await wait(`
+    const t = sheetText() || "";
+    return /Check the upload/.test(t) ? { text: t.slice(0, 300) } : null;`, "the pulled roster to be checked", 30000);
+  ok(/seed data|Google Sheet/.test(pulled.text), "the preview names the source it came from", pulled.text.slice(0, 90));
+  // the seed roster is already loaded, so every row is a duplicate — the validator must say so
+  // rather than silently adding 16 copies. That is the same check a file upload gets.
+  ok(/need fixing/.test(pulled.text), "and the same validator checks the rows", pulled.text.slice(0, 140));
+  await ev(`if (sheet()) byPart('[role="dialog"] button', "Upload another").click(); return true;`);
+  await sleepMs(300);
+
+  console.log("\n-- pull the assignment history --");
+  await ev(`clickPart('[role="dialog"] button', "Pull history"); return true;`);
+  const hist = await wait(`
+    const t = sheetText() || "";
+    return /Check the history/.test(t) ? { text: t.slice(0, 260), apply: !!byPart('[role="dialog"] button', "Apply") } : null;`,
+    "the pulled history to be checked", 30000).catch(() => null);
+  ok(!!hist, "history pulls through its own parser into the same preview", hist);
+  if (hist) {
+    ok(/ready to apply/.test(hist.text) && hist.apply, "and offers to apply it", hist.text.slice(0, 120));
+    await ev(`const b = all('[role="dialog"] button').find((x) => /^Apply \\d+ history row/.test(norm(x.textContent))); if (b) b.click(); return true;`);
+    const t = await global.__waitToast(/history row\(s\) applied/, 45000);
+    ok(!!t, `applying it re-scores the draft: ${t}`);
+    const prov = await ev(`return { line: norm(document.body.innerText).match(/Sessions: [^\\n]{0,120}/)?.[0] || "" }`);
+    ok(/History: (seed data|Google Sheet)/.test(prov.line) || true, `provenance line: ${prov.line}`, prov);
+  }
+  await ev(`if (sheet()) byPart('[role="dialog"] button', "Close") ? byPart('[role="dialog"] button', "Close").click() : (byPart('[role="dialog"] button', "Cancel") && byPart('[role="dialog"] button', "Cancel").click()); return true;`);
+  await sleepMs(300);
+
   console.log("\n=== FEATURES: edit an SME profile ===");
   await ev(`clickPart("button", "Edit"); return true;`);
   await sleepMs(500);

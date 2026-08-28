@@ -10,7 +10,7 @@ import coursesJson from "@/data/courses.json";
 import weeksJson from "@/data/weeks.json";
 import metaJson from "@/data/meta.json";
 import type {
-  AgentMove, AgentMoveAction, AgentRequest, AgentResult, ChatTurn,
+  AgentMove, AgentMoveAction, AgentRequest, AgentResult, ChatTurn, DataProvenance,
   Batch, Category, Course, Decision, DraftRow, Fix, HistoryRecord, LeafId, Meta, ModuleKey, NewClass, OverrideEvent,
   Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
@@ -21,8 +21,9 @@ import {
 import { isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { csvExporter } from "@/lib/export";
 import {
-  classTemplate, downloadCsv, emptyImport, isWorkbook, parseClassImport, parseSmeImport, smeTemplate, toSme,
-  WORKBOOK_HINT, type ImportedClass, type ImportedSme, type ImportResult,
+  classTemplate, downloadCsv, emptyImport, historyTemplate, isWorkbook, parseClassImport,
+  parseHistoryImport, parseSmeImport, smeTemplate, toHistoryRecord, toSme,
+  WORKBOOK_HINT, type ImportedClass, type ImportedHistory, type ImportedSme, type ImportResult,
 } from "@/lib/import";
 import {
   FLAG_LABEL, SEV_CHIP, applyAvailabilityBlocks, autoFix, isAvailable, istParts, nextBatchId, newBatchSessions,
@@ -58,6 +59,16 @@ const WEEKS = weeksJson as unknown as Record<WeekKey, WeekMeta>;
 const META = metaJson as unknown as Meta;
 
 const flagKey = (r: DraftRow) => r.flags.map((f) => f.code).sort().join("|");
+/** The three ingestable datasets, in the order the header names them. */
+const DATASET_LABELS: [string, string][] = [["sessions", "Sessions"], ["smes", "Roster"], ["history", "History"]];
+
+function ago(iso: string): string {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  return hrs < 24 ? `${hrs} h ago` : `${Math.round(hrs / 24)} d ago`;
+}
 const ALL_LEAVES: Record<string, boolean> = Object.fromEntries(
   ["cal", "email", "sms"].flatMap((c) => ["sme", "stu"].map((a) => [`${c}:${a}`, true])),
 );
@@ -116,6 +127,13 @@ export default function Page() {
   // what is actually wired up right now, so every control can label itself live or simulated
   const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null);
   const [sheetBusy, setSheetBusy] = useState(false);
+  // where each dataset came from, so the live source is visible instead of being a README claim
+  const [provenance, setProvenance] = useState<DataProvenance>({});
+  // assignment history drives Stage B's fairness and performance terms; an import replaces it
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>(HISTORY);
+  const [histImp, setHistImp] = useState<ImportResult<ImportedHistory>>(emptyImport);
+  // what the last pull reported, promoted into `provenance` only once the import is confirmed
+  const [pulled, setPulled] = useState<DataProvenance>({});
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextRef = useRef<DraftRow[] | null>(null);
   const pubToken = useRef(0);
@@ -169,7 +187,7 @@ export default function Page() {
       const blocks = opts.availOff ?? availOff;
       const roster = opts.smes ?? rosterFor("next");
       const smes = roster.map((s) => (s.id === META.me ? applyAvailabilityBlocks(s, blocks) : s));   // the SME's own blocks
-      const history = weekAsHistory(cur.draft, roster, WEEKS.current.iso, HISTORY);
+      const history = weekAsHistory(cur.draft, roster, WEEKS.current.iso, historyRecords);
       const sessions = opts.sessions ?? sessionsFor("next");
       const res = await runMatching(sessions, smes, history, opts.overrides ?? overrides, { llm: true });
       const prev = nextRef.current;
@@ -185,7 +203,9 @@ export default function Page() {
       setChanged(changedIds);
       setRuns((s) => ({ ...s, next: res }));
       // durable copy, so a refresh does not lose the coordinator's work
-      void saveSchedule(WEEKS.next.iso, res.draft, { stats: res.stats, flags: res.flags, published: false }).catch(() => {});
+      void saveSchedule(WEEKS.next.iso, res.draft, {
+        stats: res.stats, flags: res.flags, published: false, provenance, history: historyRecords,
+      }).catch(() => {});
       setApproved((a) => new Set([...a].filter((id) => !res.draft.some((r) => r.session_id === id))));
       setPublished((p) => ({ ...p, next: false }));   // a re-draft invalidates what people were sent
       setDecisions({});
@@ -205,7 +225,7 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, say]);
+  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, historyRecords, say]);
 
   // initial load: settle the current week (no LLM), then draft the next on top of it
   useEffect(() => {
@@ -222,6 +242,8 @@ export default function Page() {
         const saved = await loadSchedule(WEEKS.next.iso).catch(() => null);
         if (saved?.draft?.length && saved.stats) {
           if (!alive) return;
+          if (saved.provenance) setProvenance(saved.provenance);
+          if (saved.history?.length) setHistoryRecords(saved.history);
           nextRef.current = saved.draft;
           setRuns((s) => ({ ...s, next: { draft: saved.draft, flags: saved.flags ?? [], stats: saved.stats! } }));
           if (saved.published) setPublished((p) => ({ ...p, next: true }));
@@ -559,27 +581,41 @@ export default function Page() {
     () => setSmeImp({ name: file.name, rows: [], errors: [WORKBOOK_HINT], parsed: true }),
   );
 
-  /** Pull a tab as CSV text, then hand it to the same parser the file picker uses. */
-  const pullFromSheet = async (kind: "classes" | "smes") => {
-    const tab = integrations?.sheets.tabs[kind === "smes" ? "smes" : "sessions"] ?? (kind === "smes" ? "SMEs" : "Sessions");
+  /** Pull a dataset as CSV text from whichever source is configured, then hand it to the same
+   *  parser the file picker uses. Nothing is applied until the coordinator confirms the check. */
+  const pullFromSheet = async (dataset: "sessions" | "smes" | "history") => {
     setSheetBusy(true);
     try {
-      const res = await pullSheet(tab);
-      const label = `${integrations?.sheets.name ?? "Google Sheet"} · ${tab}`;
+      const res = await pullSheet(dataset);
+      const label = `${res.source ?? "Google Sheet"} · ${res.tab ?? dataset}`;
+      setPulled((p) => ({ ...p, [dataset]: { source: res.source ?? "Google Sheet", at: res.synced_at ?? new Date().toISOString(), rows: res.count } }));
       if (!res.csv) {
-        const issue = { line: "Sheet", msg: res.detail };
-        if (kind === "smes") setSmeImp({ name: label, rows: [], errors: [issue], parsed: true });
+        const issue = { line: "Source", msg: res.detail };
+        if (dataset === "smes") setSmeImp({ name: label, rows: [], errors: [issue], parsed: true });
+        else if (dataset === "history") setHistImp({ name: label, rows: [], errors: [issue], parsed: true });
         else setImp({ name: label, rows: [], errors: [issue], parsed: true });
         return;
       }
-      if (kind === "smes") parseSmes(label, res.csv);
+      if (dataset === "smes") parseSmes(label, res.csv);
+      else if (dataset === "history") setHistImp(parseHistoryImport(label, res.csv, { smes: rosterFor("next") }));
       else parseClasses(label, res.csv);
-      say(`${res.detail}`);
+      say(res.detail);
     } catch (e) {
       say(String(e).slice(0, 160));
     } finally {
       setSheetBusy(false);
     }
+  };
+
+  /** An imported history replaces what Stage B scores fairness and performance from. */
+  const runHistoryImport = async () => {
+    const recs = histImp.rows.map(toHistoryRecord) as HistoryRecord[];
+    setHistoryRecords(recs);
+    setProvenance((p) => ({ ...p, history: pulled.history ?? { source: "CSV upload", at: new Date().toISOString(), rows: recs.length } }));
+    setHistImp(emptyImport());
+    setSheet(null);
+    await runNext({ quiet: true });
+    say(`${recs.length} history row(s) applied — fairness and performance re-scored.`);
   };
 
   /** The approved week into the Sheet's draft tab — the same rows the CSV export writes. */
@@ -648,6 +684,7 @@ export default function Page() {
     setMod("dashboard");
     setTab("schedule");
     setWeek("next");
+    setProvenance((p) => ({ ...p, sessions: pulled.sessions ?? { source: "CSV upload", at, rows: imp.rows.length } }));
     await runNext({ sessions: [...sessionsFor("next"), ...sessions], overrides: [...named, ...overrides], quiet: true });
     say(`${imp.rows.length} classes imported${fresh.length ? ` · ${fresh.length} new batch${fresh.length === 1 ? "" : "es"}` : ""}.`);
   };
@@ -656,6 +693,7 @@ export default function Page() {
   const runSmeImport = async () => {
     const added = smeImp.rows.map((r) => toSme(r, META.days, META.levels));
     setExtraSmes((s) => [...s, ...added]);
+    setProvenance((p) => ({ ...p, smes: pulled.smes ?? { source: "CSV upload", at: new Date().toISOString(), rows: added.length } }));
     setSheet(null);
     setSmeImp(emptyImport());
     setSmeFilter("all");
@@ -719,7 +757,7 @@ export default function Page() {
     setAgentBusy(true);
     try {
       const roster = rosterFor("next");
-      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, HISTORY);
+      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, historyRecords);
       setAgentRes(await agentRun(WEEKS.next.iso, agentReq, nxt.draft, roster, history));
     } catch (e) {
       say(String(e).slice(0, 160));
@@ -736,7 +774,7 @@ export default function Page() {
     const base = draft ?? nxt.draft;
     try {
       const roster = rosterFor("next");
-      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, HISTORY);
+      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, historyRecords);
       const out = await agentApply(WEEKS.next.iso, plan, base, roster, history);
       const at = new Date().toISOString();
       nextRef.current = out.draft;
@@ -835,7 +873,7 @@ export default function Page() {
     setChatBusy(true);
     try {
       const roster = rosterFor("next");
-      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, HISTORY);
+      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, historyRecords);
       const res = await agentRun(WEEKS.next.iso, { mode: "chat", question: text }, nxt.draft, roster, history, history0);
       setChatTurns((t) => [...t, { role: "assistant", content: res.answer, res }]);
     } catch (e) {
@@ -898,9 +936,11 @@ export default function Page() {
 
     if (sheet.kind === "import" || sheet.kind === "smeImport") {
       const sme = sheet.kind === "smeImport";
-      const im = sme ? smeImp : imp;
+      // History is SME data, so it shares this sheet rather than earning a screen of its own.
+      const hist = sme && histImp.parsed;
+      const im: ImportResult<unknown> = hist ? histImp : sme ? smeImp : imp;
       const ok = im.rows.length, bad = im.errors.length;
-      const reset = () => (sme ? setSmeImp(emptyImport()) : setImp(emptyImport()));
+      const reset = () => { setHistImp(emptyImport()); return sme ? setSmeImp(emptyImport()) : setImp(emptyImport()); };
       const noTeacher = sme
         ? smeImp.rows.filter((r) => !r.topics.length).length
         : imp.rows.filter((r) => !r.smeId).length;
@@ -913,6 +953,10 @@ export default function Page() {
             sub: "Email is required and must be unique — it is how invites and the weekly schedule reach them. Leave sme_id blank and we issue the next one." },
           { n: "3", title: "Save as CSV and upload",
             sub: "We check every row against the course topics and level rules before anything is created." },
+          { n: "4", title: "Assignment history (optional)",
+            sub: "Five columns — sme_id, week, sessions_taught, batches, per_topic_rating. This is what fairness and performance are scored from.",
+            action: sheetBusy ? "Pulling…" : "Pull history",
+            onAction: () => void pullFromSheet("history") },
         ]
         : [
           { n: "1", title: "Download the template",
@@ -926,15 +970,17 @@ export default function Page() {
       return (
         <Sheet
           width={620} eyebrow={sme ? "SME management" : "Batch management"}
-          title={im.parsed ? "Check the upload" : sme ? "Import SMEs" : "Import from Excel"}
+          title={im.parsed ? (hist ? "Check the history" : "Check the upload") : sme ? "Import SMEs" : "Import from Excel"}
           subtitle={im.parsed
-            ? `${im.name} · ${ok} ${sme ? `SME${ok === 1 ? "" : "s"}` : `row${ok === 1 ? "" : "s"}`} ready${bad ? `, ${bad} to fix` : ""}`
+            ? `${im.name} · ${ok} ${hist ? `history row${ok === 1 ? "" : "s"}` : sme ? `SME${ok === 1 ? "" : "s"}` : `row${ok === 1 ? "" : "s"}`} ready${bad ? `, ${bad} to fix` : ""}`
             : sme
               ? "Onboard a batch of teachers at once. Download the template so the columns match, fill it in Excel, upload it back."
               : "Bring your batch → class → SME tracker in. Download the template so the columns match, fill it in Excel, upload it back."}
           footerNote={im.parsed
             ? (ok
-              ? sme
+              ? hist
+                ? "Applying replaces the history the draft scores fairness and performance from, then re-runs it."
+                : sme
                 ? "New SMEs join the pool straight away and become assignable for unfilled classes."
                 : `Imports into ${WEEKS.next.label.toLowerCase()} · anything without a teacher lands in Work items`
               : "Fix the rows above in Excel and upload again")
@@ -943,8 +989,10 @@ export default function Page() {
             ? [
               { label: "Upload another", onClick: reset },
               ...(ok ? [{
-                label: sme ? `Add ${ok} SME${ok === 1 ? "" : "s"}` : `Import ${ok} class${ok === 1 ? "" : "es"}`,
-                kind: "go" as const, onClick: () => void (sme ? runSmeImport() : runImport()),
+                label: hist ? `Apply ${ok} history row${ok === 1 ? "" : "s"}`
+                  : sme ? `Add ${ok} SME${ok === 1 ? "" : "s"}` : `Import ${ok} class${ok === 1 ? "" : "es"}`,
+                kind: "go" as const,
+                onClick: () => void (hist ? runHistoryImport() : sme ? runSmeImport() : runImport()),
               }] : []),
             ]
             : [{ label: "Cancel", onClick: () => setSheet(null) }]}
@@ -957,17 +1005,22 @@ export default function Page() {
             dropTitle="Choose your populated file"
             dropSub="CSV saved from Excel · we check it before importing"
             onFile={sme ? onSmeImportFile : onImportFile}
-            onPullSheet={() => void pullFromSheet(sme ? "smes" : "classes")}
+            historyAction={sme ? { label: "Download history template", onClick: () => { downloadCsv(historyTemplate(rosterFor("next")), "ik-history-template"); say("History template downloaded."); } } : undefined}
+            onPullSheet={() => void pullFromSheet(sme ? "smes" : "sessions")}
             sheetLive={integrations?.sheets.live}
             sheetDetail={integrations?.sheets.detail}
             sheetBusy={sheetBusy}
             tallies={im.parsed ? [
-              { value: ok, label: sme ? "ready to add" : "ready to import", tone: ok ? "good" : "warn" },
+              { value: ok, label: hist ? "ready to apply" : sme ? "ready to add" : "ready to import", tone: ok ? "good" : "warn" },
               { value: bad, label: "need fixing", tone: bad ? "bad" : "good" },
-              { value: noTeacher, label: sme ? "no topics yet" : "no teacher yet", tone: "warn" },
+              ...(hist ? [] : [{ value: noTeacher, label: sme ? "no topics yet" : "no teacher yet", tone: "warn" as const }]),
             ] : null}
             issues={im.errors}
-            preview={sme
+            preview={hist
+              ? histImp.rows.map((r, i) => ({ key: `${r.smeId}-${r.week}-${i}`, tag: r.smeId, main: smeName(r.smeId),
+                when: `${r.week} · ${r.sessionsTaught} taught`,
+                who: r.batches.join(", ") || "no batches", whoTone: "plain" as const }))
+              : sme
               ? smeImp.rows.map((r) => ({ key: r.id, tag: r.id, main: r.name, when: r.email, who: `${r.level} · ${r.preferred}/wk`, whoTone: "plain" as const }))
               : imp.rows.map((r, i) => ({
                 key: `${r.batch}-${i}`, tag: r.batch, main: `${r.topic} · ${META.type_label[r.type]}`,
@@ -1520,6 +1573,14 @@ export default function Page() {
           <div>
             <h1 className="m-0 text-[22px] font-bold" style={{ letterSpacing: "-0.02em" }}>{MODULES[mod].label}</h1>
             <div className="mt-[3px] text-[12.5px]" style={{ color: "var(--muted)" }}>{MODULES[mod].sub}</div>
+            {role === "coordinator" && (
+              <div className="mt-[3px] text-[11.5px]" style={{ color: "var(--muted-2)" }} title="Where each dataset in front of you came from">
+                {DATASET_LABELS.map(([key, label]) => {
+                  const o = provenance[key];
+                  return `${label}: ${o ? `${o.source}, synced ${ago(o.at)}` : "seed data"}`;
+                }).join(" · ")}
+              </div>
+            )}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-[14px]">
             <div className="flex items-center gap-[10px]">

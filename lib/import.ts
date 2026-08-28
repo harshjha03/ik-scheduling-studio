@@ -22,6 +22,12 @@ export interface ImportedSme {
   avail: [number, number, number][];      // [day, fromHourIst, toHourIst]
 }
 
+/** One past week for one SME — what Stage B's fairness and performance terms are computed from. */
+export interface ImportedHistory {
+  smeId: string; week: string; sessionsTaught: number;
+  batches: string[]; ratings: Record<string, number>;
+}
+
 export interface ImportResult<T> { name: string; rows: T[]; errors: ImportIssue[]; parsed: boolean }
 
 export const emptyImport = <T>(): ImportResult<T> => ({ name: "", rows: [], errors: [], parsed: false });
@@ -111,6 +117,79 @@ export function smeTemplate(courses: Record<string, Course>, levels: string[]): 
     "# preferred_per_week: 1–8 · work_days: Mon-Fri or Tue|Thu|Sat · work_hours: HH:MM-HH:MM between 08:00 and 20:00 IST",
   ];
   return [head, ...ex, "", ...notes].join("\n");
+}
+
+export function historyTemplate(smes: SME[]): string {
+  const head = "sme_id,week,sessions_taught,batches,per_topic_rating";
+  const ex = smes.slice(0, 2).map((s, i) => [
+    s.id, `2026-W3${4 + i}`, 4 + i, (s.topics.length ? "DSA-01|DSA-02" : ""),
+    s.topics.slice(0, 2).map((t, j) => `${t}:${(4.5 + j * 0.2).toFixed(1)}`).join("|"),
+  ].join(","));
+  const notes = [
+    "# one row per SME per past week — this is what fairness and performance are scored from",
+    "# week: ISO week, e.g. 2026-W34",
+    "# sessions_taught: a whole number, 0 or more",
+    "# batches: batch ids taught that week, separated with |",
+    "# per_topic_rating: Topic:4.6|Topic:4.2 — the topic names must match the course topics",
+  ];
+  return [head, ...ex, "", ...notes].join("\n");
+}
+
+export interface HistoryCtx { smes: SME[] }
+
+/** Deliberately the smallest of the three parsers: history is the least-used ingest path. Same
+ *  contract as the others though — row-level errors, nothing accepted until the check is shown. */
+export function parseHistoryImport(name: string, text: string, ctx: HistoryCtx): ImportResult<ImportedHistory> {
+  const { head, error } = header(text, ["sme_id", "week", "sessions_taught"], "template");
+  if (error) return { name, rows: [], errors: [error], parsed: true };
+
+  const lines = dataLines(text).slice(1);
+  const errors: ImportIssue[] = [];
+  const rows: ImportedHistory[] = [];
+  const col = (r: string[], c: string) => { const i = head.indexOf(c); return i < 0 ? "" : (r[i] ?? "").trim(); };
+  const seen = new Set<string>();
+
+  lines.forEach((line, i) => {
+    const n = `Row ${i + 2}`;
+    const r = splitCsv(line);
+    if (!r.filter(Boolean).length) return;
+    const smeId = col(r, "sme_id").toUpperCase();
+    const week = col(r, "week");
+
+    if (!smeId) return void errors.push({ line: n, msg: "sme_id is blank." });
+    const sme = ctx.smes.find((s) => s.id === smeId);
+    if (!sme) return void errors.push({ line: n, msg: `${smeId} is not on the roster — import the SMEs first.` });
+    if (!/^\d{4}-W\d{2}$/.test(week)) return void errors.push({ line: n, msg: `Week "${week}" for ${sme.name} must look like 2026-W34.` });
+    if (seen.has(`${smeId}|${week}`)) return void errors.push({ line: n, msg: `${sme.name} already has a row for ${week} in this file.` });
+
+    const taught = Number(col(r, "sessions_taught"));
+    if (!Number.isInteger(taught) || taught < 0) {
+      return void errors.push({ line: n, msg: `${sme.name} ${week}: sessions_taught must be a whole number, 0 or more.` });
+    }
+
+    // Topic names are not checked against the course list: the engine also scores generic keys
+    // ("doubt", and the lowercased subject) that no course declares as a topic.
+    const ratings: Record<string, number> = {};
+    let bad: string | null = null;
+    col(r, "per_topic_rating").split("|").map((x) => x.trim()).filter(Boolean).forEach((pair) => {
+      const cut = pair.lastIndexOf(":");
+      const topic = cut < 0 ? "" : pair.slice(0, cut).trim();
+      const score = Number(pair.slice(cut + 1));
+      if (!topic || !Number.isFinite(score)) { bad = bad ?? `"${pair}" is not Topic:4.6.`; return; }
+      if (score < 0 || score > 5) { bad = bad ?? `${topic} is rated ${score} — ratings run 0 to 5.`; return; }
+      ratings[topic] = score;
+    });
+    if (bad) return void errors.push({ line: n, msg: `${sme.name} ${week}: ${bad}` });
+
+    seen.add(`${smeId}|${week}`);
+    rows.push({
+      smeId, week, sessionsTaught: taught,
+      batches: col(r, "batches").split("|").map((b) => b.trim().toUpperCase()).filter(Boolean),
+      ratings,
+    });
+  });
+
+  return { name, rows, errors, parsed: true };
 }
 
 // ---------------------------------------------------------------- class import
@@ -276,6 +355,14 @@ export function parseSmeImport(name: string, text: string, ctx: SmeCtx): ImportR
 const hhmmOf = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
 /** An imported row becomes a real SME the engine can schedule: IST working hours land as UTC windows. */
+/** An imported history row in the shape run_pipeline's `history` argument expects. */
+export function toHistoryRecord(r: ImportedHistory) {
+  return {
+    sme_id: r.smeId, week: r.week, sessions_taught: r.sessionsTaught,
+    batches: r.batches, per_topic_rating: r.ratings, post_session_rating: null,
+  };
+}
+
 export function toSme(r: ImportedSme, days: string[], levels: string[]): SME {
   const weekly_availability: AvailabilityWindow[] = r.avail.map(([d, from, to]) => ({
     weekday: days[d],

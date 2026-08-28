@@ -1,6 +1,6 @@
 import type {
   AgentApplyResult, AgentMove, AgentRequest, AgentResult, ApprovalsResult, ChatTurn, Decision, DraftRow,
-  ExportRow, HistoryRecord, OverrideEvent, RunResult, Session, SME,
+  DataProvenance, ExportRow, HistoryRecord, OverrideEvent, RunResult, Session, SME,
 } from "./types";
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -46,6 +46,10 @@ export interface SavedSchedule {
   stats?: RunResult["stats"];
   flags?: RunResult["flags"];
   published?: boolean;
+  /** where each dataset came from, so provenance survives a refresh */
+  provenance?: DataProvenance;
+  /** an imported assignment history, which Stage B scores from */
+  history?: HistoryRecord[];
 }
 
 export async function loadSchedule(week: string): Promise<SavedSchedule | null> {
@@ -85,9 +89,12 @@ export async function getIntegrations(): Promise<IntegrationsInfo> {
 
 export interface SheetResult extends PublishResult { csv?: string; tab?: string }
 
-/** One tab as CSV text. The caller runs it through the same parser a file upload uses. */
-export function pullSheet(tab: string, spreadsheetId?: string) {
-  return post<SheetResult>("/api/sheets/pull", { tab, spreadsheet_id: spreadsheetId ?? null });
+export interface PullResult extends SheetResult { dataset?: string; source?: string; synced_at?: string }
+
+/** One dataset as CSV text, from whichever source is configured. The caller runs it through the
+ *  same parser a file upload uses — there is no second column contract. */
+export function pullSheet(dataset: "sessions" | "smes" | "history", spreadsheetId?: string) {
+  return post<PullResult>("/api/sheets/pull", { dataset, spreadsheet_id: spreadsheetId ?? null });
 }
 
 /** The approved week into the draft tab, same columns as the CSV export. */

@@ -8,6 +8,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from engine import channels as C  # noqa: E402
+from engine import ingest as IN  # noqa: E402
 from engine import sheets as SH  # noqa: E402
 from engine.store import Store  # noqa: E402
 
@@ -425,3 +426,65 @@ def test_write_draft_fills_missing_cells_rather_than_shifting_columns(sheet):
     calls = []
     SH.write_draft(None, [{"week": "2026-W37"}], api=lambda m, p, b=None: calls.append((m, p, b)) or {})
     assert calls[1][2]["values"][1] == ["2026-W37"] + [""] * (len(SH.EXPORT_COLUMNS) - 1)
+
+
+# ---------------- ingest: one path, two sources ----------------
+
+def test_seed_source_serialises_every_dataset_into_its_import_contract():
+    """The seed writer must emit exactly the headers lib/import.ts checks for, or the bundled data
+    cannot travel the same path a Sheet does."""
+    src = IN.SeedSource()
+    heads = {
+        "sessions": "batch_id,course,level,learners,topic,class_type,day,time,sme_name",
+        "smes": "sme_id,name,email,phone,city,courses,topics,level,preferred_per_week,work_days,work_hours",
+        "history": "sme_id,week,sessions_taught,batches,per_topic_rating",
+    }
+    for dataset, head in heads.items():
+        res = src.fetch(dataset)
+        assert res["status"] == "sent" and res["live"] is False, dataset
+        assert res["source"] == "seed data" and res["count"] > 0
+        lines = res["csv"].split("\r\n")
+        assert lines[0] == head, dataset
+        assert len(lines[1].split(",")) >= len(head.split(",")) - 2   # quoted cells may merge on a naive split
+    # the header rows must match the TypeScript templates, which own the contract
+    ts = open(os.path.join(ROOT, "lib", "import.ts")).read()
+    for head in heads.values():
+        assert f'"{head}"' in ts or f"const head = \"{head}\"" in ts, head
+
+
+def test_seed_source_needs_no_credentials_and_is_the_default(monkeypatch):
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_JSON", raising=False)
+    monkeypatch.delenv("SHEET_ID", raising=False)
+    assert isinstance(IN.pick_source(), IN.SeedSource)
+    assert IN.pick_source().fetch("sessions")["count"] == 41
+
+
+def test_a_configured_sheet_wins_and_seed_can_be_forced(sheet):
+    assert isinstance(IN.pick_source(), IN.SheetSource)
+    assert isinstance(IN.pick_source(prefer="seed"), IN.SeedSource)
+
+
+def test_sheet_source_tags_its_rows_with_where_they_came_from(sheet):
+    src = IN.SheetSource()
+    src.tabs["smes"] = "Roster2026"
+    calls = []
+    monkey = lambda sid, tab, api=None: calls.append(tab) or C.Result("sent", "ok", 1, True, csv="a\r\n")  # noqa: E731
+    SH_read, SH.read_tab = SH.read_tab, monkey
+    try:
+        res = src.fetch("smes")
+    finally:
+        SH.read_tab = SH_read
+    assert calls == ["Roster2026"] and res["source"] == "Google Sheet"
+
+
+def test_unknown_dataset_is_named_not_guessed():
+    assert IN.SeedSource().fetch("payroll")["status"] == "error"
+    assert IN.SheetSource().fetch("payroll")["status"] == "error"
+
+
+def test_seed_roster_hours_are_converted_back_to_ist():
+    """The roster contract is IST hours; the engine stores UTC windows. 03:30Z is 09:00 IST."""
+    assert IN._to_ist_hhmm("03:30") == "09:00"
+    assert IN._to_ist_hhmm("02:30") == "08:00"
+    assert IN._to_ist_hhmm("14:30") == "20:00"
