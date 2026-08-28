@@ -1,5 +1,6 @@
 import type {
-  AgentApplyResult, AgentMove, AgentRequest, AgentResult, ChatTurn, ApprovalsResult, Decision, DraftRow, HistoryRecord, OverrideEvent, RunResult, Session, SME,
+  AgentApplyResult, AgentMove, AgentRequest, AgentResult, ApprovalsResult, ChatTurn, Decision, DraftRow,
+  ExportRow, HistoryRecord, OverrideEvent, RunResult, Session, SME,
 } from "./types";
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -67,4 +68,29 @@ export function agentRun(
 /** Applies through the engine's override path with actor `agent`; Stage D re-validates server-side. */
 export function agentApply(week: string, plan: AgentMove[], draft: DraftRow[], smes: SME[], history: HistoryRecord[]) {
   return post<AgentApplyResult>("/api/agent/apply", { week, plan, actor: "agent", auto: false, draft, smes, history });
+}
+
+export interface IntegrationsInfo {
+  channels: Record<string, { live: boolean; detail: string; name: string }>;
+  storage: { driver: string; location: string; durable: boolean };
+  sheets: { live: boolean; detail: string; name: string; spreadsheet_id: string | null; tabs: Record<string, string> };
+  llm: { live: boolean; provider: string | null; model: string | null };
+}
+
+export async function getIntegrations(): Promise<IntegrationsInfo> {
+  const res = await fetch("/api/integrations");
+  if (!res.ok) throw new Error(`/api/integrations → ${res.status}`);
+  return res.json();
+}
+
+export interface SheetResult extends PublishResult { csv?: string; tab?: string }
+
+/** One tab as CSV text. The caller runs it through the same parser a file upload uses. */
+export function pullSheet(tab: string, spreadsheetId?: string) {
+  return post<SheetResult>("/api/sheets/pull", { tab, spreadsheet_id: spreadsheetId ?? null });
+}
+
+/** The approved week into the draft tab, same columns as the CSV export. */
+export function pushSheet(week: string, weekLabel: string, rows: ExportRow[], tab?: string) {
+  return post<SheetResult>("/api/sheets/push", { week, week_label: weekLabel, rows, tab: tab ?? null });
 }

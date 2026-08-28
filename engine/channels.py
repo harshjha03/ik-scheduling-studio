@@ -73,6 +73,13 @@ def _post(url: str, body: dict | str, headers: dict, method: str = "POST") -> di
     return json.loads(raw) if raw.strip().startswith(("{", "[")) else {"raw": raw}
 
 
+def _get(url: str, headers: dict) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": "ik-scheduler/1.0", **headers}, method="GET")
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        raw = resp.read().decode() or "{}"
+    return json.loads(raw) if raw.strip().startswith(("{", "[")) else {"raw": raw}
+
+
 # ---------------------------------------------------------------- payload builders (pure)
 
 def _span(row: dict) -> tuple[datetime, datetime]:
@@ -146,6 +153,7 @@ def _disabled() -> str | None:
 
 
 CAL_SCOPE = "https://www.googleapis.com/auth/calendar"
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 
 
 def publishes_as_user() -> bool:
@@ -211,21 +219,23 @@ def _blob(name: str) -> dict:
     return json.loads(raw)
 
 
-def _google_token() -> str:
+def _google_token(scopes: list[str] | None = None) -> str:
     """Access token, as a person if GOOGLE_OAUTH_JSON is set, else as the service account.
-    Requires `google-auth` (in requirements.txt)."""
+    Requires `google-auth` (in requirements.txt). `scopes` defaults to calendar write, so existing
+    callers are unchanged; Sheets asks for its own."""
     from google.auth.transport.requests import Request   # type: ignore
 
+    scopes = list(scopes or [CAL_SCOPE])
     if publishes_as_user():
         from google.oauth2.credentials import Credentials  # type: ignore
         d = _blob("GOOGLE_OAUTH_JSON")                   # {client_id, client_secret, refresh_token}
         creds = Credentials(None, refresh_token=d["refresh_token"], client_id=d["client_id"],
-                            client_secret=d["client_secret"], scopes=[CAL_SCOPE],
+                            client_secret=d["client_secret"], scopes=scopes,
                             token_uri=d.get("token_uri", "https://oauth2.googleapis.com/token"))
     else:
         from google.oauth2 import service_account        # type: ignore
         creds = service_account.Credentials.from_service_account_info(
-            _blob("GOOGLE_SERVICE_ACCOUNT_JSON"), scopes=[CAL_SCOPE])
+            _blob("GOOGLE_SERVICE_ACCOUNT_JSON"), scopes=scopes)
         if subject := os.environ.get("GOOGLE_IMPERSONATE"):   # domain-wide delegation, if configured
             creds = creds.with_subject(subject)
     creds.refresh(Request())

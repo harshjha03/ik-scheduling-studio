@@ -17,6 +17,7 @@ from engine.llm import llm_configured, llm_provider  # noqa: E402
 dotenv.load(os.path.join(ROOT, ".env.local"))
 dotenv.load(os.path.join(ROOT, ".env"))
 from engine import channels  # noqa: E402
+from engine import sheets  # noqa: E402
 from engine import stages as S  # noqa: E402
 from engine import tools  # noqa: E402
 from engine.agent import run_agent  # noqa: E402
@@ -62,9 +63,32 @@ def health():
 @app.get("/api/integrations")
 def integrations():
     """What is actually wired up right now — the UI labels every channel live or simulated."""
-    return {"channels": channels.status(), "storage": store().info(),
+    return {"channels": channels.status(), "storage": store().info(), "sheets": sheets.status(),
             "llm": {"live": llm_configured(), "provider": llm_provider() if llm_configured() else None,
                     "model": os.environ.get("LLM_MODEL")}}
+
+
+@app.post("/api/sheets/pull")
+def sheets_pull(body: dict = Body(...)):
+    """One tab as CSV text. The frontend parses it with the same validator a file upload uses, so
+    there is exactly one column contract and one place row errors are worded."""
+    tab = (body.get("tab") or "").strip()
+    if not tab:
+        raise HTTPException(422, "`tab` is required (the sheet tab to read)")
+    return sheets.read_tab(body.get("spreadsheet_id"), tab)
+
+
+@app.post("/api/sheets/push")
+def sheets_push(body: dict = Body(...)):
+    """The approved week into the draft tab, in the same column order as the CSV export."""
+    if not body.get("week"):
+        raise HTTPException(422, "`week` is required")
+    rows = body.get("rows")
+    if not isinstance(rows, list):
+        raise HTTPException(422, "`rows` must be a list of export rows")
+    res = sheets.write_draft(body.get("spreadsheet_id"), rows, body.get("tab"))
+    store().record_publish(body["week"], "sheet", "ops", res["status"], res["detail"], res["live"])
+    return res
 
 
 @app.post("/api/publish")

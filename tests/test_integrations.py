@@ -8,6 +8,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from engine import channels as C  # noqa: E402
+from engine import sheets as SH  # noqa: E402
 from engine.store import Store  # noqa: E402
 
 ROW = {
@@ -322,3 +323,105 @@ def test_no_redirect_configured_sends_to_everyone(live):
     sent = []
     C.send_email([ROW], "sme", ["a@ik.example", "b@ik.example"], "Next week", api=lambda b: sent.append(b))
     assert [s["to"][0] for s in sent] == ["a@ik.example", "b@ik.example"]
+
+
+# ---------------- Google Sheets ----------------
+
+@pytest.fixture
+def sheet(monkeypatch, live):
+    monkeypatch.setenv("SHEET_ID", "1AbCsheetid")
+    monkeypatch.delenv("PUBLISH_DISABLED", raising=False)
+
+
+def test_sheets_columns_match_the_typescript_contract():
+    """lib/export.ts owns the column order; this asserts the Python side has not drifted from it,
+    which is the whole reason there is no second parser here."""
+    src = open(os.path.join(ROOT, "lib", "export.ts")).read()
+    listed = src.split("EXPORT_COLUMNS: (keyof ExportRow)[] = [", 1)[1].split("];", 1)[0]
+    ts = [c.strip().strip('"') for c in listed.replace("\n", " ").split(",") if c.strip().strip('"')]
+    assert list(SH.EXPORT_COLUMNS) == ts
+    # and the engine's own export row emits exactly those keys, in that order
+    from engine.run import _export_row
+    row = dict(ROW, start_utc="2026-09-07T04:30:00Z", batch_id="DSA-01", type="class")
+    assert list(_export_row(row, "approved")) == ts
+
+
+def test_sheets_degrade_to_simulated_without_credentials(monkeypatch):
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_JSON", raising=False)
+    monkeypatch.delenv("SHEET_ID", raising=False)
+    read = SH.read_tab(None, "Sessions")
+    assert read["status"] == "simulated" and read["live"] is False and read["csv"] == ""
+    assert "GOOGLE_OAUTH_JSON" in read["detail"]
+    write = SH.write_draft(None, [{"week": "2026-W37"}])
+    assert write["status"] == "simulated" and write["live"] is False
+    assert SH.status()["live"] is False
+
+
+def test_sheets_says_which_piece_is_missing(monkeypatch, live):
+    monkeypatch.delenv("SHEET_ID", raising=False)
+    ok, why = SH.sheets_ready()
+    assert not ok and "SHEET_ID not set" in why
+
+
+def test_sheets_kill_switch_beats_credentials(monkeypatch, sheet):
+    monkeypatch.setenv("PUBLISH_DISABLED", "1")
+    assert SH.read_tab(None, "Sessions")["status"] == "simulated"
+    assert SH.sheets_ready()[1] == "PUBLISH_DISABLED is set"
+
+
+def test_read_tab_returns_csv_the_typescript_parser_can_split(sheet):
+    calls = []
+
+    def api(method, path, body=None):
+        calls.append((method, path, body))
+        return {"values": [["batch_id", "course", "sme_name"],
+                           ["DSA-01", "DSA", "Nair, Kavya"],          # comma -> must be quoted
+                           ["DSA-02", "DSA", 'He said "hi"'],         # quote -> must be doubled
+                           ["", "", ""]]}                             # blank row -> dropped
+    res = SH.read_tab(None, "Sessions", api=api)
+    assert res["status"] == "sent" and res["live"] is True and res["count"] == 2
+    assert calls == [("GET", "/values/Sessions", None)]
+    assert res["csv"] == ('batch_id,course,sme_name\r\n'
+                          'DSA-01,DSA,"Nair, Kavya"\r\n'
+                          'DSA-02,DSA,"He said ""hi"""\r\n')
+    # the quoting rule is lib/export.ts's, so lib/import.ts::splitCsv reads it back unchanged
+    assert SH.to_csv([["a", "b,c", 'd"e']]) == 'a,"b,c","d""e"\r\n'
+
+
+def test_read_tab_reports_an_empty_tab_rather_than_pretending(sheet):
+    res = SH.read_tab(None, "SMEs", api=lambda *a, **k: {"values": []})
+    assert res["status"] == "skipped" and res["csv"] == "" and "empty" in res["detail"]
+
+
+def test_read_tab_survives_an_api_error(sheet):
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+    res = SH.read_tab(None, "Sessions", api=boom)
+    assert res["status"] == "error" and res["live"] is True and res["csv"] == ""
+
+
+def test_write_draft_emits_export_columns_and_clears_first(sheet):
+    calls = []
+
+    def api(method, path, body=None):
+        calls.append((method, path, body))
+        return {}
+    rows = [{"week": "2026-W37", "date": "2026-09-07", "time_ist": "10:00", "batch": "DSA-01",
+             "subject": "DSA", "sub_specialty": "Arrays & Strings", "session_type": "class",
+             "sme_name": "Kavya Nair", "status": "approved", "flags": ""}]
+    res = SH.write_draft(None, rows, api=api)
+    assert res["status"] == "sent" and res["count"] == 1 and res["live"] is True
+    # stale rows from a longer week must not survive a shorter one
+    assert calls[0][0] == "POST" and calls[0][1].endswith(":clear")
+    assert calls[1][0] == "PUT" and "valueInputOption=RAW" in calls[1][1]
+    values = calls[1][2]["values"]
+    assert values[0] == list(SH.EXPORT_COLUMNS)
+    assert values[1] == ["2026-W37", "2026-09-07", "10:00", "DSA-01", "DSA", "Arrays & Strings",
+                         "class", "Kavya Nair", "approved", ""]
+
+
+def test_write_draft_fills_missing_cells_rather_than_shifting_columns(sheet):
+    calls = []
+    SH.write_draft(None, [{"week": "2026-W37"}], api=lambda m, p, b=None: calls.append((m, p, b)) or {})
+    assert calls[1][2]["values"][1] == ["2026-W37"] + [""] * (len(SH.EXPORT_COLUMNS) - 1)

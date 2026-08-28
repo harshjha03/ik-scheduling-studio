@@ -15,6 +15,12 @@ interface Props {
   dropTitle: string;
   dropSub: string;
   onFile: (file: File) => void;
+  /** Pull the same columns straight from a Google Sheet tab. Absent when the importer has no tab. */
+  onPullSheet?: () => void;
+  /** live | simulated, from /api/integrations — never claim a source we cannot read */
+  sheetLive?: boolean;
+  sheetDetail?: string;
+  sheetBusy?: boolean;
   tallies?: ImportTally[] | null;
   issues?: ImportIssue[] | null;
   preview?: ImportPreviewRow[] | null;
@@ -49,7 +55,10 @@ function Section({ label, gap, maxHeight, children }: {
 }
 
 /** Shared by the class and SME importers — same shape, different rows. */
-export default function ImportSheet({ steps, stepSize, warnInk, dropTitle, dropSub, onFile, tallies, issues, preview }: Props) {
+export default function ImportSheet({
+  steps, stepSize, warnInk, dropTitle, dropSub, onFile, onPullSheet, sheetLive, sheetDetail, sheetBusy,
+  tallies, issues, preview,
+}: Props) {
   return (
     <div className="flex flex-col gap-[13px]">
       {steps && (
@@ -94,6 +103,23 @@ export default function ImportSheet({ steps, stepSize, warnInk, dropTitle, dropS
               onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
             />
           </label>
+          {onPullSheet && (
+            /* The sheet path is the same path: it fetches the tab as CSV text and runs it through
+               the very same parser and preview the file picker uses. */
+            <div className="flex items-center gap-[10px] rounded-[14px] p-[11px_13px]"
+              style={{ border: "1px solid var(--line)", background: "#fff" }}>
+              <span className="text-[15px] leading-none" aria-hidden>📊</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] font-semibold">Or pull from the Google Sheet</span>
+                <span className="mt-[2px] block text-[11px] leading-[1.45]" style={{ color: sheetLive ? "var(--green-ink)" : "var(--muted)" }}>
+                  {sheetLive ? "Live · " : "Simulated · "}{sheetDetail ?? "checking…"}
+                </span>
+              </span>
+              <button className="btn btn-sm shrink-0" disabled={sheetBusy} onClick={onPullSheet}>
+                {sheetBusy ? "Pulling…" : "Pull from Sheet"}
+              </button>
+            </div>
+          )}
         </>
       )}
 

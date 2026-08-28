@@ -15,7 +15,8 @@ import type {
   Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
 import {
-  agentApply, agentRun, loadSchedule, publishLeaf, runMatching, saveSchedule, submitApprovals,
+  agentApply, agentRun, getIntegrations, loadSchedule, publishLeaf, pullSheet, pushSheet, runMatching,
+  saveSchedule, submitApprovals, type IntegrationsInfo,
 } from "@/lib/api";
 import { isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { csvExporter } from "@/lib/export";
@@ -112,6 +113,9 @@ export default function Page() {
   const [chatBusy, setChatBusy] = useState(false);
   // session_id -> new start_utc, from a copilot reschedule the coordinator applied
   const [sessionEdits, setSessionEdits] = useState<Record<string, string>>({});
+  // what is actually wired up right now, so every control can label itself live or simulated
+  const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null);
+  const [sheetBusy, setSheetBusy] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextRef = useRef<DraftRow[] | null>(null);
   const pubToken = useRef(0);
@@ -121,6 +125,11 @@ export default function Page() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
     toastTimer.current = setTimeout(() => setToast(null), 2800);
+  }, []);
+
+  useEffect(() => {
+    // never claim a live source: the labels come from the server, and absence is shown as simulated
+    getIntegrations().then(setIntegrations).catch(() => setIntegrations(null));
   }, []);
 
   useEffect(() => {
@@ -526,23 +535,71 @@ export default function Page() {
     return { smeId: r.sme_id, day: p.day, hour: p.hour, batch: r.batch_id };
   });
 
+  /** The one place CSV text becomes checked rows. A file upload and a Google Sheet tab both land
+   *  here, so there is a single column contract and a single place row errors are worded. */
+  const parseClasses = useCallback((name: string, text: string) => setImp(parseClassImport(name, text, {
+    courses: COURSES, levels: META.levels, types: META.type_label, days: META.days,
+    hours: META.hours, taken: takenSlots(), smes: smesFor("next"),
+    isAvailable: (s, d, h) => isAvailable(s, SESSIONS.next[0].start_utc, d, h),
+  })), [rows, smesFor]);
+
+  const parseSmes = useCallback((name: string, text: string) => setSmeImp(parseSmeImport(name, text, {
+    courses: COURSES, levels: META.levels, days: META.days, smes: rosterFor("next"),
+  })), [rosterFor]);
+
   const onImportFile = (file: File) => readCsv(
     file,
-    (text) => setImp(parseClassImport(file.name, text, {
-      courses: COURSES, levels: META.levels, types: META.type_label, days: META.days,
-      hours: META.hours, taken: takenSlots(), smes: smesFor("next"),
-      isAvailable: (s, d, h) => isAvailable(s, SESSIONS.next[0].start_utc, d, h),
-    })),
+    (text) => parseClasses(file.name, text),
     () => setImp({ name: file.name, rows: [], errors: [WORKBOOK_HINT], parsed: true }),
   );
 
   const onSmeImportFile = (file: File) => readCsv(
     file,
-    (text) => setSmeImp(parseSmeImport(file.name, text, {
-      courses: COURSES, levels: META.levels, days: META.days, smes: rosterFor("next"),
-    })),
+    (text) => parseSmes(file.name, text),
     () => setSmeImp({ name: file.name, rows: [], errors: [WORKBOOK_HINT], parsed: true }),
   );
+
+  /** Pull a tab as CSV text, then hand it to the same parser the file picker uses. */
+  const pullFromSheet = async (kind: "classes" | "smes") => {
+    const tab = integrations?.sheets.tabs[kind === "smes" ? "smes" : "sessions"] ?? (kind === "smes" ? "SMEs" : "Sessions");
+    setSheetBusy(true);
+    try {
+      const res = await pullSheet(tab);
+      const label = `${integrations?.sheets.name ?? "Google Sheet"} · ${tab}`;
+      if (!res.csv) {
+        const issue = { line: "Sheet", msg: res.detail };
+        if (kind === "smes") setSmeImp({ name: label, rows: [], errors: [issue], parsed: true });
+        else setImp({ name: label, rows: [], errors: [issue], parsed: true });
+        return;
+      }
+      if (kind === "smes") parseSmes(label, res.csv);
+      else parseClasses(label, res.csv);
+      say(`${res.detail}`);
+    } catch (e) {
+      say(String(e).slice(0, 160));
+    } finally {
+      setSheetBusy(false);
+    }
+  };
+
+  /** The approved week into the Sheet's draft tab — the same rows the CSV export writes. */
+  const pushToSheet = async () => {
+    if (!run) return;
+    setSheetBusy(true);
+    try {
+      const decs = rows
+        .map((r) => decisions[r.session_id]
+          ?? (approved.has(r.session_id) ? { session_id: r.session_id, action: "approve" as const } : null))
+        .filter(Boolean) as Decision[];
+      const out = await submitApprovals(run.draft, decs);
+      const res = await pushSheet(WEEKS[week].iso, WEEKS[week].label, out.export_rows);
+      say(res.live ? res.detail : `${res.detail} Set SHEET_ID and Google credentials to write for real.`);
+    } catch (e) {
+      say(String(e).slice(0, 160));
+    } finally {
+      setSheetBusy(false);
+    }
+  };
 
   /** Imported classes become real sessions and go through the same pipeline as everything else —
    *  a named teacher rides in as an override so the engine honours it or says why it cannot. */
@@ -900,6 +957,10 @@ export default function Page() {
             dropTitle="Choose your populated file"
             dropSub="CSV saved from Excel · we check it before importing"
             onFile={sme ? onSmeImportFile : onImportFile}
+            onPullSheet={() => void pullFromSheet(sme ? "smes" : "classes")}
+            sheetLive={integrations?.sheets.live}
+            sheetDetail={integrations?.sheets.detail}
+            sheetBusy={sheetBusy}
             tallies={im.parsed ? [
               { value: ok, label: sme ? "ready to add" : "ready to import", tone: ok ? "good" : "warn" },
               { value: bad, label: "need fixing", tone: bad ? "bad" : "good" },
@@ -1481,7 +1542,17 @@ export default function Page() {
               ) : null}
             </div>
             {role === "coordinator" && (
-              <button className="btn" onClick={() => void exportCsv()} disabled={loading || !run}>Export CSV</button>
+              <span className="flex items-center gap-[9px]">
+                <button className="btn" onClick={() => void exportCsv()} disabled={loading || !run}>Export CSV</button>
+                <button
+                  className="btn" onClick={() => void pushToSheet()} disabled={loading || !run || sheetBusy}
+                  title={integrations?.sheets.live
+                    ? `Writes the week into the Google Sheet — ${integrations.sheets.detail}`
+                    : `Simulated — ${integrations?.sheets.detail ?? "Google Sheets not configured"}`}
+                >
+                  {sheetBusy ? "Pushing…" : `Push to Sheet${integrations?.sheets.live ? "" : " (simulated)"}`}
+                </button>
+              </span>
             )}
           </div>
         </div>
