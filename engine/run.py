@@ -37,7 +37,11 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
     counts: Counter = Counter()      # sme_id -> sessions in this draft
     queue: list[tuple[dict, list[dict]]] = []
 
-    # Stage A + B, chronological
+    # Stage A + B, chronological greedy, no backtracking. On realistic utilisation this is
+    # matching-optimal — test_greedy_is_matching_optimal asserts the seed week's maximum matching
+    # fills no more sessions than this loop does (39 of 41; the other two have zero and one eligible
+    # SME respectively, and that one is double-booked at the same hour). An optimiser would add cost
+    # and explanation burden for zero rows, and "why did it move Priya?" is the harder question.
     for sess in ordered:
         row = _base_row(sess)
         rows[sess["id"]] = row

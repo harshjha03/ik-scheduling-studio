@@ -728,3 +728,66 @@ def test_sync_availability_fills_external_busy_from_one_freebusy_call(monkeypatc
     # and the synced roster changes what Stage A allows
     surv, _ = S.stage_a_hard_filter(session("S1"), roster, [])
     assert "A" not in [s["id"] for s in surv] and "B" in [s["id"] for s in surv]
+
+
+# ---------------- is chronological greedy leaving rows on the table? ----------------
+
+def _max_matching(sessions, smes):
+    """Most sessions any assignment could fill, ignoring the order they are considered in.
+
+    Eligibility is Stage A against an *empty* draft, so the only coupling left is that one SME
+    cannot teach two sessions at once. Every seed session is 60 minutes starting on the half hour,
+    so two sessions overlap exactly when they share a start — which makes (sme, start) the resource
+    being matched, and plain augmenting paths exact rather than a heuristic. The precondition is
+    asserted, so a future data change fails the test instead of quietly proving a weaker claim.
+    """
+    spans = {s["id"]: S.session_span(s) for s in sessions}
+    assert {int(s["duration_min"]) for s in sessions} == {60}, "reduction assumes one session length"
+    assert {S.parse_utc(s["start_utc"]).minute for s in sessions} == {30}, "reduction assumes aligned starts"
+    for a in sessions:                       # and therefore: overlap iff identical start
+        for b in sessions:
+            if a["id"] < b["id"]:
+                assert S.overlaps(a, b) == (spans[a["id"]][0] == spans[b["id"]][0])
+
+    eligible = {s["id"]: [m["id"] for m in S.stage_a_hard_filter(s, smes, [])[0]] for s in sessions}
+    by_id = {s["id"]: s for s in sessions}
+    match: dict[tuple[str, object], str] = {}
+
+    def assign(sid, seen):
+        for sme_id in eligible[sid]:
+            key = (sme_id, spans[sid][0])
+            if key not in match:
+                match[key] = sid
+                return True
+            if key not in seen:
+                seen.add(key)
+                if assign(match[key], seen):
+                    match[key] = sid
+                    return True
+        return False
+
+    filled = sum(1 for s in sessions if assign(s["id"], set()))
+    return filled, eligible, by_id
+
+
+def test_greedy_is_matching_optimal():
+    """The sharpest question this design invites is "why not an optimiser instead of chronological
+    greedy?". On this week the answer is provable: a maximum matching fills no more sessions."""
+    sessions, smes, history = rd("sessions_next"), rd("smes"), rd("history")
+    res = run_pipeline(sessions, smes, history, [], llm_enabled=False)
+    greedy_filled = sum(1 for r in res["draft"] if r["sme_id"])
+
+    optimal, eligible, by_id = _max_matching(sessions, smes)
+    assert optimal <= greedy_filled, (
+        f"a maximum matching fills {optimal} of {len(sessions)} but the pipeline fills {greedy_filled} — "
+        "greedy is leaving rows on the table and the design comment is wrong")
+    assert greedy_filled == len(sessions) - 2 == 39
+
+    # and the two it cannot fill are genuinely unfillable, not an artefact of the order
+    unfilled = sorted(r["session_id"] for r in res["draft"] if not r["sme_id"])
+    assert unfilled == ["W37-DSA-01-1", "W37-ML-02-0"]
+    assert eligible["W37-DSA-01-1"] == [], "nobody at all can teach advanced DP on Saturday afternoon"
+    assert eligible["W37-ML-02-0"] == ["T07"], "exactly one eligible SME"
+    # ...who is also the only one eligible for the session running at the same time
+    assert eligible["W37-ML-01-0"] == ["T07"]
+    assert S.overlaps(by_id["W37-ML-02-0"], by_id["W37-ML-01-0"])
