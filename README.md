@@ -1,5 +1,9 @@
 # IK Scheduling studio — SME-to-session scheduling agent (prototype)
 
+**Live: https://ik-scheduling-studio.vercel.app** · source: https://github.com/harshjha03/ik-scheduling-studio
+Open it with no setup: the whole demo runs on bundled seed data, and every integration says `simulated`
+until you give it credentials.
+
 Weekly scheduler for a live-classes operation (Interview Kickstart: DSA / ML / AI / PM courses).
 10 batches × 3–5 sessions = 41 sessions per week over two weeks, 16 SMEs, 4 weeks of history.
 A hybrid pipeline (deterministic rules + LLM tie-break) drafts the week, flags what needs a human,
