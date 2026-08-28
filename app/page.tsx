@@ -1446,6 +1446,17 @@ export default function Page() {
             />
           </div>
         )}
+        {r.override_effect && !readOnly && (
+          <div>
+            <SectionLabel>Why the score moved</SectionLabel>
+            <div className="rounded-[14px] p-[11px_13px] text-[12.5px] leading-[1.55]"
+              style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
+              {r.override_effect.kind === "direct"
+                ? `Your override on this class re-scored it — the pairing you replaced is −0.2 and the one you chose is +0.1 on the next draft.`
+                : `Changed because your override moved ${r.override_effect.smes.join(" and ")}'s load. Fairness is normalised across the whole ${COURSES[r.subject]?.name ?? r.subject} pool, so every ${r.subject} class re-scores when a ${r.subject} teacher's week changes.`}
+            </div>
+          </div>
+        )}
         {!!r.flags.length && !readOnly && (
           <div>
             <SectionLabel>Why it is flagged</SectionLabel>

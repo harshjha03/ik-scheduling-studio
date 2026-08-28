@@ -791,3 +791,33 @@ def test_greedy_is_matching_optimal():
     # ...who is also the only one eligible for the session running at the same time
     assert eligible["W37-ML-01-0"] == ["T07"]
     assert S.overlaps(by_id["W37-ML-02-0"], by_id["W37-ML-01-0"])
+
+
+def test_an_override_marks_every_row_it_re_scored_including_other_subjects():
+    """One override moved six rows and only one carried an explanation. Two of those six are PM rows:
+    Rahul Desai carries PM and DSA, so loading him with a DSA class re-normalises the PM pool's
+    fairness. That coupling is correct, and it used to read as random churn."""
+    sessions, smes, history = rd("sessions_next"), rd("smes"), rd("history")
+    ov = [{"session_id": "W37-DSA-04-1", "batch_id": "DSA-04", "from_sme_id": "T03", "to_sme_id": "T14"}]
+    before = {r["session_id"]: r for r in run_pipeline(sessions, smes, history, [], llm_enabled=False)["draft"]}
+    after = run_pipeline(sessions, smes, history, ov, llm_enabled=False)["draft"]
+
+    changed = [r for r in after if before[r["session_id"]]["sme_id"] != r["sme_id"]]
+    assert len(changed) == 6, [r["session_id"] for r in changed]
+    assert all(r["adjusted_from_override"] for r in changed), \
+        [r["session_id"] for r in changed if not r["adjusted_from_override"]]
+
+    # the row ops actually touched says so directly...
+    direct = next(r for r in after if r["session_id"] == "W37-DSA-04-1")
+    assert direct["override_effect"]["kind"] == "direct"
+    assert "Rahul Desai" in direct["override_effect"]["smes"]
+
+    # ...and the PM rows explain themselves as a ripple, naming who moved
+    pm = [r for r in changed if r["subject"] == "PM"]
+    assert len(pm) == 2
+    for r in pm:
+        assert r["override_effect"] == {"kind": "ripple", "smes": ["Rahul Desai"]}
+
+    # a subject the override cannot reach is left alone
+    untouched = [r for r in after if r["subject"] not in ("DSA", "PM")]
+    assert untouched and all(r["override_effect"] is None for r in untouched)

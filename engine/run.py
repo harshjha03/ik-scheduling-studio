@@ -12,7 +12,7 @@ def _base_row(session: dict) -> dict:
                                         "duration_min", "mode", "required_training_level")}
     row.update({"session_id": session["id"], "sme_id": None, "sme_name": None, "score": None,
                 "components": None, "stage": None, "flags": [], "candidates": [], "eliminated": [],
-                "adjusted_from_override": False})
+                "adjusted_from_override": False, "override_effect": None})
     return row
 
 
@@ -30,6 +30,11 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
     auto-assignment (no LLM_FALLBACK flag) — for a settled past week, which is not an LLM outage."""
     hist = S.build_hist(history or [], smes)
     adjust = S.stage_e_adjustments(overrides or [])
+    # Every SME an override touched. Moving a class off one teacher and onto another changes both of
+    # their projected loads, and load is normalised per subject pool — so an SME who carries two
+    # subjects (Rahul Desai is PM + DSA) shifts the fairness term for rows in a pool the override
+    # never named. That coupling is the model being right, and it used to read as random churn.
+    touched = {sid for o in (overrides or []) for sid in (o.get("from_sme_id"), o.get("to_sme_id")) if sid}
     by_id = {s["id"]: s for s in smes}
     ordered = sorted(sessions, key=lambda s: (s["start_utc"], s["id"]))
     rows: dict[str, dict] = {}
@@ -125,6 +130,17 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         for c in scored:
             c["breaches_fairness"] = S.fairness_band_breach(c["sme_id"], sess["subject"], smes, hist, own)
         row["candidates"] = scored
+        # Direct: this row's own pairing carries a Stage E adjustment. Ripple: one of its candidates
+        # had its load moved by an override elsewhere, which re-normalised this pool.
+        direct = sorted({by_id[c["sme_id"]]["name"] for c in scored if c["components"]["adjustment"]})
+        # Ripple reaches the whole subject pool, not just this row's candidates: Stage B normalises
+        # fairness against the pool's lightest and heaviest load, so moving any pool member's load
+        # re-scores every row in that pool — including rows the moved SME cannot teach.
+        pool = {m["id"] for m in S.subject_pool(smes, sess["subject"])}
+        ripple = sorted({by_id[sid]["name"] for sid in touched & pool} - set(direct))
+        row["adjusted_from_override"] = bool(direct or ripple)
+        row["override_effect"] = ({"kind": "direct" if direct else "ripple", "smes": direct or ripple}
+                                  if direct or ripple else None)
         row["flags"] = S.sort_flags(row["flags"])
 
     draft_rows = [rows[s["id"]] for s in ordered]

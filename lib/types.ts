@@ -159,6 +159,9 @@ export interface DraftRow {
   candidates: Candidate[];
   eliminated: Eliminated[];
   adjusted_from_override: boolean;
+  /** why this row's scores moved: its own pairing was overridden (direct), or an override elsewhere
+   *  re-normalised its subject pool's load (ripple). `smes` names who moved. */
+  override_effect: { kind: "direct" | "ripple"; smes: string[] } | null;
   status?: string;
 }
 
