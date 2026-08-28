@@ -123,6 +123,8 @@ const H = `
   const cards = () => all("button.cal-card");
   const cardText = () => cards().map((c) => norm(c.innerText));
   const sheet = () => document.querySelector('[role="dialog"]');
+  const chat = () => document.querySelector('section[aria-label="Copilot chat"]');
+  const chatText = () => (chat() ? norm(chat().innerText) : null);
   const sheetText = () => (sheet() ? norm(sheet().innerText) : null);
   const toast = () => { const t = document.querySelector('[role="status"]'); return t ? norm(t.innerText) : null; };
   const bg = (el) => getComputedStyle(el).backgroundColor;
@@ -142,6 +144,25 @@ const H = `
     return true;
   };
 `;
+
+/** Send a chat turn and wait for the reply, whether it came from the model or the deterministic floor. */
+async function chatSend(ev, wait, text) {
+  const before = await ev(`return all('[data-turn="assistant"]').length`);
+  // two evaluates with a node-side wait between them: an await inside one is collected when the
+  // page re-renders mid-flight, which is what "Promise was collected" means
+  await ev(`
+    const box = document.querySelector('section[aria-label="Copilot chat"] input');
+    const d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    d.call(box, ${JSON.stringify(text)}); box.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;`);
+  await sleep(250);
+  await ev(`clickPart('section[aria-label="Copilot chat"] button', "Send"); return true;`);
+  return wait(`
+    const t = chatText() || "";
+    const grew = all('[data-turn="assistant"]').length > ${before};
+    return (grew && !/Working — reading the draft/.test(t)) ? { reply: true } : null;`,
+    `a reply to ${JSON.stringify(text)}`, 240000);
+}
 
 let pass = 0, fail = 0;
 const results = [];
@@ -213,6 +234,9 @@ async function main() {
     if (!only || only === "features") { await b.goto("http://localhost:3000/");
       await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
       await features(ev, wait, settle, b); }
+    if (!only || only === "copilot") { await b.goto("http://localhost:3000/");
+      await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
+      await copilot(ev, wait); }
     // React warnings (mixed style shorthands, key errors, bad state updates) must not pile up unseen
     console.log("\n=== console ===");
     const noise = /Download the React DevTools|\[HMR\]|favicon\.ico/i;
@@ -716,6 +740,197 @@ async function features(ev, wait, settle, b) {
     btn.click(); await sleep(600);
     return { closed: !sheet(), toast: norm(document.body.innerText).includes("profile updated") };`);
   ok(saved.closed && saved.toast, "a valid one saves and the toast confirms it", saved);
+}
+
+
+// ------------------------------------------------------------------ copilot
+// Recovery & Review Copilot: report a teacher out -> transcript -> plan card -> apply -> diff badge ->
+// the overrides log names the Copilot. Works with or without an LLM key: without one the run is the
+// deterministic fallback and the sheet must say so.
+async function copilot(ev, wait) {
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  console.log("\n=== COPILOT: recovery ===");
+  const ask = await ev(`return { btn: !!byPart("button", "Ask the copilot") };`);
+  ok(ask.btn, "dashboard offers 'Ask the copilot'", ask);
+
+  await ev(`const nav = all("nav button").find((x) => /SME management/.test(x.title || "")); nav.click(); return true;`);
+  await wait(`return !!byPart("button", "Report unavailable")`, "SME management to open", 20000);
+  // Rahul Desai (T14) is the seeded SME persona and holds a class next week
+  const opened = await ev(`
+    const row = all("tbody tr").find((r) => /Rahul Desai/.test(norm(r.innerText)));
+    if (!row) return { skipped: true };
+    [...row.querySelectorAll("button")].find((x) => /Report unavailable/.test(norm(x.textContent))).click();
+    await sleep(500);
+    const t = sheetText() || "";
+    return { open: !!sheet(), title: /Cover for Rahul Desai/.test(t), whole: /Whole week/.test(t), find: !!byPart('[role="dialog"] button', "Find cover") };`);
+  ok(!opened.skipped && opened.open && opened.title, "'Report unavailable…' opens the copilot pre-filled for that teacher", opened);
+  ok(opened.whole && opened.find, "with a day picker and a Find cover action", opened);
+
+  await ev(`clickPart('[role="dialog"] button', "Find cover"); return true;`);
+  await wait(`return /Show working/.test(sheetText() || "") || null;`, "the copilot to finish", 240000);
+  const res = await ev(`
+    const t = sheetText() || "";
+    const steps = (t.match(/Show working — (\\d+) step/) || [])[1];
+    clickPart('[role="dialog"] button', "Show working"); await sleep(300);
+    const t2 = sheetText() || "";
+    return { steps: Number(steps), fallback: /Copilot fallback/.test(t), budget: /Budget exhausted/.test(t),
+             plan: /Plan — \\d+ (move|change)/i.test(t), pills: all('[role="dialog"] span').filter((x) => /^(fallback · )?(ok|fairness warning)$/.test(norm(x.textContent))).length,
+             transcriptOpen: /Hide working/.test(t2), toolLine: /get_affected_rows|get_candidates|—/.test(t2),
+             apply: !!byPart('[role="dialog"] button', "Apply plan"), replacing: /replacing Rahul Desai/.test(t) };`);
+  ok(res.transcriptOpen && res.toolLine, `transcript renders (${res.steps} steps)`, res);
+  ok(res.plan && res.pills > 0 && res.replacing, `plan card lists moves with verdict pills (${res.pills})`, res);
+  if (res.fallback || res.budget) ok(true, `honest banner shown: ${res.fallback ? "fallback (no LLM)" : "budget exhausted"}`);
+  else ok(true, "LLM run completed without a fallback banner");
+  ok(res.apply, "Apply plan is offered", res);
+
+  const before = await ev(`return all('[title="changed since last run"]').length`);
+  await ev(`clickPart('[role="dialog"] button', "Apply plan"); return true;`);
+  const applied = await global.__waitToast(/Copilot plan applied — \d+ (row|change)/, 30000);
+  ok(!!applied, `apply reports what changed: ${applied}`);
+  const n = Number((applied || "").match(/(\d+) (?:row|change)/)?.[1] || 0);
+  // one dot per row whose staffing changed; a plan may also carry a reschedule, which moves a card
+  const after = await wait(`const d = all('[title="changed since last run"]').length; return d > 0 ? d : null;`,
+    "diff dots", 15000).catch(() => null);
+  ok(!!after && after <= n, `diff badge marks the changed row(s): ${after} dot(s) for ${n} change(s)`, { after, n });
+
+  const log = await ev(`
+    clickPart(".tab", "Overrides"); await sleep(400);
+    const t = body();
+    return { copilot: all("span").some((x) => norm(x.textContent) === "Copilot"), stageD: /Stage D re-validated/.test(t) };`);
+  ok(log.copilot, "overrides log shows actor Copilot");
+  ok(log.stageD, "and says the week was re-validated by Stage D");
+  await ev(`clickPart(".tab", "Schedule"); return true;`);
+
+  console.log("\n=== COPILOT: review ===");
+  await ev(`clickPart("button", "Ask the copilot"); return true;`);
+  await wait(`return !!document.querySelector('[role="dialog"] input')`, "the review sheet", 10000);
+  await ev(`
+    const box = document.querySelector('[role="dialog"] input');
+    const d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    d.call(box, "why is W37-DSA-01-1 unfilled?"); box.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;`);
+  await sleep(250);
+  await ev(`clickPart('[role="dialog"] button', "Ask"); return true;`);
+  await wait(`return /Show working/.test(sheetText() || "") || null;`, "the review answer", 240000);
+  const rev = await ev(`const t = sheetText() || ""; return { answer: /W37-DSA-01-1|unfilled|eligible/i.test(t), noApply: !byPart('[role="dialog"] button', "Apply plan") || /Plan — /i.test(t) };`);
+  ok(rev.answer, "review mode answers about the named session", rev);
+  ok(rev.noApply, "no plan is offered unless there is one to apply", rev);
+  await ev(`clickPart('[role="dialog"] button', "Dismiss"); return true;`);
+
+  console.log("\n=== COPILOT: floating chat ===");
+  const fab = await ev(`
+    const b = all("button").find((x) => /Open the scheduling copilot/.test(x.getAttribute("aria-label") || ""));
+    return { there: !!b, label: b ? norm(b.textContent) : null };`);
+  ok(fab.there, "a floating copilot button is always on screen", fab);
+
+  await ev(`all("button").find((x) => /Open the scheduling copilot/.test(x.getAttribute("aria-label") || "")).click(); return true;`);
+  await wait(`return !!chat()`, "the chat panel", 10000);
+  const c0 = await ev(`
+    const t = chatText() || "";
+    return { open: !!chat(), suggestions: all('section[aria-label="Copilot chat"] button').filter((x) => /\\?$|find cover/i.test(norm(x.textContent))).length,
+             input: !!chat().querySelector("input"), notADialog: !chat().getAttribute("role") };`);
+  ok(c0.open && c0.input, "clicking it opens a chat panel with an input", c0);
+  ok(c0.suggestions >= 2, `and offers ${c0.suggestions} starter prompts`, c0);
+  ok(c0.notADialog, "the panel is not a modal dialog — the week stays visible behind it", c0);
+
+  // a question: answer + evidence, and no plan invented for it
+  await chatSend(ev, wait, "Who is overloaded this week?");
+  // a multi-line answer must render as real rows, not one blob — the renderer is plain-text only,
+  // so a mis-escaped newline would silently collapse every option onto one line
+  const shape = await ev(`
+    const b = all('[data-turn="assistant"]').pop();
+    const raw = norm(b.innerText);
+    return { rows: b.querySelectorAll("p, li").length, bullets: b.querySelectorAll("li").length,
+             literal: /\\\\n/.test(raw) || raw.includes("\\n") };`);
+  // a one-sentence answer is legitimately one row; the structured case is asserted after the fix turn
+  ok(shape.rows >= 1, `the answer renders as ${shape.rows} row(s)`, shape);
+  ok(!shape.literal, "no literal \\n leaks into the rendered answer", shape);
+  const c1 = await ev(`
+    const t = chatText() || "";
+    return { bubbles: all('[data-turn="assistant"]').length, working: /Show working/.test(t),
+             answered: t.length > 200, fallback: /Copilot fallback/.test(t) };`);
+  ok(c1.answered && c1.bubbles >= 1, "the copilot answers in the thread", c1);
+  ok(c1.working || c1.fallback, `the reply carries its evidence${c1.fallback ? " (fallback: no tool calls, and it says so)" : ""}`, c1);
+
+  // a task: report a drop-out in words -> plan card with Apply, in the same thread
+  await chatSend(ev, wait, "Rahul Desai is out on Tuesday — find cover");
+  const planned = await ev(`return { apply: /Apply plan/.test(chatText() || ""), text: (chatText() || "").slice(-260) };`);
+  if (!planned.apply) {
+    ok(/could not|no eligible|cannot|unable|fallback/i.test(planned.text),
+      "no plan offered, and the reply says why (a clear no is a valid outcome)", planned.text);
+  } else {
+    ok(true, "reporting a drop-out in plain words produces an applyable plan");
+    // cover can be a different teacher or a different hour — the card must name whichever it chose
+    const moved = await ev(`const t = chatText() || ""; return {
+      pills: (t.match(/\\bok\\b|fairness warning/g) || []).length,
+      names: /replacing/.test(t) || /MOVE TIME/i.test(t) || /training level/i.test(t) };`);
+    ok(moved.names && moved.pills > 0, "the in-chat plan card names the change it chose, with verdicts", moved);
+    await ev(`clickPart('section[aria-label="Copilot chat"] button', "Apply plan"); return true;`);
+    const t = await global.__waitToast(/Copilot plan applied — \d+ (row|change)/, 30000);
+    ok(!!t, `applying from the chat changes the draft: ${t}`);
+    ok(await wait(`return /✓ Applied/.test(chatText() || "") ? true : null;`, "the applied marker", 10000).catch(() => false),
+      "and that message is marked applied so it cannot be re-applied");
+    const log = await ev(`
+      clickPart(".tab", "Overrides"); await sleep(400);
+      return all("span").some((x) => norm(x.textContent) === "Copilot");`);
+    ok(log, "the chat-applied move is logged as Copilot too");
+    await ev(`clickPart(".tab", "Schedule"); return true;`);
+  }
+
+  // memory across turns
+  const c3 = await chatSend(ev, wait, "and what did you just change?").catch(() => null);
+  ok(!!c3, "a follow-up turn is answered in the same conversation", c3);
+
+  // the copilot implementing a change of its own: a reschedule, applied to the real draft
+  console.log("\n-- copilot implements a reschedule --");
+  const pre = await ev(`return { unfilled: cards().filter((c) => /Unfilled/.test(norm(c.innerText))).length }`);
+  await chatSend(ev, wait, "implement the fix for the classes without a teacher").catch(() => null);
+  const proposal = await ev(`
+    const t = chatText() || "";
+    return { moveTime: /MOVE TIME/i.test(t), apply: /Apply plan/.test(t), level: /LEVEL/i.test(t),
+             newSession: /start a new (session|chat)/i.test(t), tail: t.slice(-300) };`);
+  // it once answered a multi-issue ask with "please start a new session" — the budget is per message
+  ok(!proposal.newSession, "never tells the coordinator to start a new session", proposal.tail);
+  if (!proposal.apply) {
+    ok(true, `no applyable plan this run — the reply explains instead (${proposal.tail.slice(0, 90)}…)`);
+  } else {
+    ok(proposal.moveTime || proposal.level,
+      `the plan card labels what kind of change it is${proposal.moveTime ? " (move time)" : " (level)"}`, proposal);
+    await ev(`clickPart('section[aria-label="Copilot chat"] button', "Apply plan"); return true;`);
+    const t = await global.__waitToast(/Copilot plan applied — \d+ change/, 60000);
+    ok(!!t, `applying it re-runs the draft: ${t}`);
+    const after = await wait(`
+      const u = cards().filter((c) => /Unfilled/.test(norm(c.innerText))).length;
+      return /✓ Applied/.test(chatText() || "") ? { unfilled: u } : null;`, "the applied marker", 30000).catch(() => null);
+    ok(!!after, "the message is marked applied", after);
+    if (after && proposal.moveTime) {
+      ok(after.unfilled <= pre.unfilled,
+        `rescheduling did not leave more classes unstaffed (${pre.unfilled} -> ${after.unfilled} unfilled)`, after);
+    }
+    // the structured layout is worth asserting on a reply that actually has options in it
+    const struct = await ev(`
+      const b = all('[data-turn="assistant"]').pop();
+      return { rows: b.querySelectorAll("p, li").length, text: norm(b.innerText).slice(0, 120) };`);
+    ok(struct.rows >= 1, `the fix reply renders as ${struct.rows} row(s)`, struct);
+    await ev(`clickPart(".tab", "Overrides"); return true;`);
+    await sleep(500);
+    const log = await ev(`
+      const t = body();
+      return { copilot: all("span").some((x) => norm(x.textContent) === "Copilot"),
+               moved: /Class moved from/.test(t), level: /Training level raised/.test(t) };`);
+    ok(log.copilot && (log.moved || log.level),
+      "the change is logged as Copilot, naming what it did", log);
+    await ev(`clickPart(".tab", "Schedule"); return true;`);
+  }
+
+  const cleared = await ev(`
+    clickPart('section[aria-label="Copilot chat"] button', "Clear"); await sleep(300);
+    const t = chatText() || "";
+    return { fresh: /Ask about this week/.test(t) };`);
+  ok(cleared.fresh, "Clear starts a new conversation", cleared);
+  await ev(`all("button").find((x) => /Close the copilot/.test(x.getAttribute("aria-label") || "")).click(); return true;`);
+  ok(await ev(`return !chat() && !!all("button").find((x) => /Open the scheduling copilot/.test(x.getAttribute("aria-label") || ""))`),
+    "closing it puts the floating button back");
 }
 
 

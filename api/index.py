@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import Counter
 
 from fastapi import Body, FastAPI, HTTPException
 
@@ -16,6 +17,9 @@ from engine.llm import llm_configured, llm_provider  # noqa: E402
 dotenv.load(os.path.join(ROOT, ".env.local"))
 dotenv.load(os.path.join(ROOT, ".env"))
 from engine import channels  # noqa: E402
+from engine import stages as S  # noqa: E402
+from engine import tools  # noqa: E402
+from engine.agent import run_agent  # noqa: E402
 from engine.run import apply_approvals, run_pipeline  # noqa: E402
 from engine.store import store  # noqa: E402
 
@@ -131,3 +135,82 @@ def put_schedule(body: dict = Body(...)):
     payload = {k: v for k, v in body.items() if k != "week"}
     store().save_schedule(body["week"], payload)
     return {"saved": body["week"], "rows": len(body["draft"]), "storage": store().info()}
+
+
+# ---------- Recovery & Review Copilot ----------
+
+def _agent_ctx(body: dict) -> dict:
+    if not isinstance(body.get("draft"), list) or not body["draft"]:
+        raise HTTPException(422, "`draft` must be the current non-empty list of draft rows")
+    if not isinstance(body.get("smes"), list) or not body["smes"]:
+        raise HTTPException(422, "`smes` must be a non-empty list")
+    unavailable = None
+    if body.get("mode") == "recovery":
+        if not body.get("sme_id"):
+            raise HTTPException(422, "`sme_id` is required in recovery mode")
+        unavailable = {"sme_id": body["sme_id"], "days": body.get("days") or None}
+    try:
+        return tools.make_ctx(body.get("week") or "this week", body["draft"], body["smes"], body.get("history") or [], unavailable)
+    except tools.ToolError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/agent/run")
+def agent_run(body: dict = Body(...)):
+    """Run the copilot. The state rides in the body like every other call; nothing is applied here."""
+    mode = body.get("mode")
+    if mode not in ("recovery", "review", "chat"):
+        raise HTTPException(422, "`mode` must be `recovery`, `review` or `chat`")
+    if mode in ("review", "chat") and not (body.get("question") or "").strip():
+        raise HTTPException(422, "`question` is required in review and chat mode")
+    turns = body.get("turns")
+    if turns is not None and not isinstance(turns, list):
+        raise HTTPException(422, "`turns` must be a list of {role, content}")
+    ctx = _agent_ctx(body)
+    return run_agent(ctx, mode, sme_id=body.get("sme_id"), days=body.get("days") or None,
+                     question=body.get("question"), turns=turns)
+
+
+@app.post("/api/agent/apply")
+def agent_apply(body: dict = Body(...)):
+    """Apply a plan through the existing override path (apply_approvals, actor `agent`), then Stage D
+    re-validates the result — the same guarantee every other path gets. Returns the draft payload."""
+    if body.get("auto") and os.environ.get("AGENT_AUTO_APPLY") != "1":
+        raise HTTPException(403, "autonomous apply is disabled on this server (AGENT_AUTO_APPLY is not 1)")
+    plan = body.get("plan")
+    if not isinstance(plan, list) or not plan:
+        raise HTTPException(422, "`plan` must be a non-empty list of moves")
+    # Reschedules and upgrades change the *source* data (the session's hour, the roster's levels), which
+    # the client owns and re-runs the whole pipeline over. This route only ever writes staffing moves.
+    other = [a for a in plan if isinstance(a, dict) and tools._kind_of(a) != "move"]
+    if other:
+        raise HTTPException(422, {"message": "this route applies staffing moves only; apply reschedule/upgrade "
+                                             "entries to the draft's sessions and roster, then re-run the pipeline",
+                                  "kinds": sorted({tools._kind_of(a) for a in other})})
+    ctx = _agent_ctx({**body, "mode": "apply"})
+    try:
+        sim = tools.simulate_plan(ctx, plan)
+    except tools.ToolError as e:
+        raise HTTPException(422, str(e))
+    bad = [v for v in sim["verdicts"] if v["verdict"].startswith("breaks")]
+    if bad:   # the plan is stale against this draft — refuse rather than write a known violation
+        raise HTTPException(409, {"message": "plan no longer valid against the current draft", "verdicts": bad})
+    decisions = [{"session_id": v["session_id"], "action": "override", "override_sme_id": v["to_sme"]} for v in sim["verdicts"]]
+    out = apply_approvals(body["draft"], decisions)
+    rows = out["final_schedule"]
+    for r in rows:   # Stage D re-checks the whole week; strip its old verdicts first so it speaks fresh
+        r["flags"] = [f for f in r["flags"] if f["code"] not in tools.STAGE_D_CODES]
+    S.stage_d_validate(rows, body["smes"], ctx["hist"])
+    tools.reflag_unfilled(rows, body["smes"])   # Stage D skips never-staffed rows; their blocker must survive
+    for r in rows:
+        r["flags"] = S.sort_flags(r["flags"])
+    flags = S.sort_flags([f for r in rows for f in r["flags"]])
+    actor = body.get("actor") or "agent"
+    log = [{**e, "actor": actor, "reason": next((m.get("reason") for m in plan if m.get("session_id") == e["session_id"]), None)}
+           for e in out["override_log"]]
+    return {"draft": rows, "flags": flags,
+            "stats": {"total_sessions": len(rows), "assigned": sum(1 for r in rows if r["sme_id"]),
+                      "unfilled": sum(1 for r in rows if not r["sme_id"]),
+                      "flags_by_severity": dict(Counter(f["severity"] for f in flags)),
+                      "flags_by_code": dict(Counter(f["code"] for f in flags))},
+            "override_log": log, "applied": [e["session_id"] for e in log], "diff": len(log), "actor": actor}

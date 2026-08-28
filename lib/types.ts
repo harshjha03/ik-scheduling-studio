@@ -219,6 +219,8 @@ export interface OverrideEvent {
   changed_rows?: string[];
   /** set after a re-run: the pipeline could not keep this pick (it breaks a hard rule) */
   reverted?: boolean;
+  /** who made the change — ops (default) or the Copilot agent */
+  actor?: "ops" | "Copilot";
 }
 
 export interface ExportRow {
@@ -311,6 +313,7 @@ export type SheetState =
   | { kind: "smeImport" }
   | { kind: "profile" }
   | { kind: "studentEmail" }
+  | { kind: "agent" }
   | null;
 
 /** The editable half of an SME record — contact details and the weekly preference. Skills, level
@@ -323,4 +326,104 @@ export interface Profile {
   city: string;
   level: LevelName;
   preferred: string;
+}
+
+// ---- Recovery & Review Copilot ----
+
+export type AgentMode = "recovery" | "review" | "chat";
+
+export interface AgentRequest {
+  mode: AgentMode;
+  /** recovery: the teacher reported unavailable, optionally only on these days (Mon..Sat) */
+  smeId?: string;
+  days?: string[];
+  /** review: free-text question about the draft */
+  question?: string;
+}
+
+export type AgentActionKind = "move" | "reschedule" | "upgrade";
+
+interface AgentActionBase {
+  kind?: AgentActionKind;
+  reason: string;
+  verdict?: "ok" | "fairness_warning" | string;
+  detail?: string | null;
+  score?: number | null;
+  /** AGENT_FALLBACK when the deterministic floor produced this entry */
+  flag?: string;
+}
+
+/** Reassign one class. */
+export interface AgentMoveAction extends AgentActionBase {
+  kind?: "move";
+  session_id: string;
+  from_sme: string | null;
+  to_sme: string;
+  to_sme_name?: string;
+}
+
+/** Same class, another hour this week — applied by editing the session, then re-running the pipeline. */
+export interface AgentRescheduleAction extends AgentActionBase {
+  kind: "reschedule";
+  session_id: string;
+  from_day: string;
+  from_hour_ist: string;
+  to_day: string;
+  to_hour_ist: string;
+  /** the new start the engine computed, so the client never re-derives it */
+  start_utc: string;
+  eligible_after?: { sme_id: string; name: string }[];
+}
+
+/** Raise a teacher's training level, bounded by what a class actually requires. */
+export interface AgentUpgradeAction extends AgentActionBase {
+  kind: "upgrade";
+  sme_id: string;
+  sme_name: string;
+  from_level: number;
+  to_level: number;
+  unblocks?: string[];
+}
+
+export type AgentMove = AgentMoveAction | AgentRescheduleAction | AgentUpgradeAction;
+
+export const isReschedule = (a: AgentMove): a is AgentRescheduleAction => a.kind === "reschedule";
+export const isUpgrade = (a: AgentMove): a is AgentUpgradeAction => a.kind === "upgrade";
+export const isMove = (a: AgentMove): a is AgentMoveAction => !a.kind || a.kind === "move";
+
+export interface AgentStep {
+  thought: string;
+  tool: string | null;
+  args: Record<string, unknown> | null;
+  result_digest: string;
+  error?: boolean;
+}
+
+export type AgentPlan = AgentMove[] | null;
+
+export interface AgentResult {
+  status: "ok" | "budget_exhausted" | "fallback";
+  answer: string;
+  plan: AgentPlan;
+  transcript: AgentStep[];
+  simulation: { verdicts: AgentMove[]; all_ok: boolean; flag_diff: { before: Record<string, number>; after: Record<string, number> } } | null;
+  meta: { tool_calls: number; llm_turns: number; elapsed_s: number; model: string | null; error: string | null; affected: string[] };
+}
+
+/** One line of the floating copilot conversation. Assistant turns keep the whole result so their own
+ *  evidence and plan render with them — a later answer can never apply an earlier plan. */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+  res?: AgentResult;
+  applied?: boolean;
+}
+
+export interface AgentApplyResult {
+  draft: DraftRow[];
+  flags: Flag[];
+  stats: Partial<RunResult["stats"]>;
+  override_log: { session_id: string; batch_id: string; from_sme_id: string | null; to_sme_id: string; to_sme_name: string; rule_risk: string | null; actor: string; reason: string | null }[];
+  applied: string[];
+  diff: number;
 }

@@ -48,8 +48,14 @@ class LLMUnavailable(LLMError):
     kind = "provider_unavailable"  # 5xx / "high demand" — transient, retried once
 
 
+class LLMEmptyResponse(LLMError):
+    """HTTP 200 with no usable text — a truncated completion, or a thinking model that spent the
+    whole budget reasoning. A malformed answer, not an outage, so callers retry rather than fail over."""
+    kind = "empty_response"
+
+
 # most actionable first; used when several chunks fail for different reasons
-KIND_PRIORITY = ["daily_quota_exhausted", "rate_limited", "provider_unavailable", "timeout", "provider_error", "not_configured"]
+KIND_PRIORITY = ["daily_quota_exhausted", "rate_limited", "provider_unavailable", "timeout", "empty_response", "provider_error", "not_configured"]
 
 
 def classify(exc: BaseException) -> str:
@@ -80,6 +86,12 @@ def _hint(kind: str) -> str:
         "provider_unavailable": "Re-run in a moment, or switch LLM_MODEL to a less busy model.",
         "not_configured": "Set ANTHROPIC_API_KEY, or LLM_API_KEY + LLM_BASE_URL.",
     }.get(kind, "")
+
+
+def cause(kind: str | None, model: str) -> str:
+    """One plain sentence for a non-technical reader. The raw provider text stays in the caller's
+    error field; a coordinator never needs to read a 429 body."""
+    return _cause(kind, model) if kind else ""
 
 
 def explain(kind: str | None, model: str, n_fallback: int, failover: dict | None = None) -> str | None:
@@ -213,6 +225,13 @@ def fallback_llm_call(payload: dict) -> dict:
 def openai_compatible_call(payload: dict, cfg: dict | None = None) -> dict:
     """POST {base_url}/chat/completions with JSON-object mode. ponytail: stdlib urllib, no SDK.
     Providers without schema enforcement get the schema in the prompt; _validate() catches anything off."""
+    system = SYSTEM + " Output a single JSON object matching this JSON schema exactly: " + json.dumps(SCHEMA)
+    return chat_json(system, [{"role": "user", "content": json.dumps(payload)}], cfg)
+
+
+def chat_json(system: str, messages: list[dict], cfg: dict | None = None) -> dict:
+    """One JSON-mode chat completion over an OpenAI-compatible endpoint — same transport, retry ladder
+    and error taxonomy as Stage C; the agent loop uses it with a running message list."""
     cfg = cfg or primary_cfg()
     model = cfg["model"]
     body = {
@@ -220,11 +239,7 @@ def openai_compatible_call(payload: dict, cfg: dict | None = None) -> dict:
         "temperature": 0,
         "response_format": {"type": "json_object"},
         **cfg["extra"],  # provider-specific knobs, e.g. {"reasoning_effort":"low"} for Gemini
-        "messages": [
-            {"role": "system", "content": SYSTEM + " Output a single JSON object matching this JSON schema exactly: "
-             + json.dumps(SCHEMA)},
-            {"role": "user", "content": json.dumps(payload)},
-        ],
+        "messages": [{"role": "system", "content": system}, *messages],
     }
     req = urllib.request.Request(
         f"{cfg['base_url'].rstrip('/')}/chat/completions", data=json.dumps(body).encode(),
@@ -256,7 +271,53 @@ def openai_compatible_call(payload: dict, cfg: dict | None = None) -> dict:
             raise LLMError(f"HTTP {e.code} from provider: {detail}") from e
         except TimeoutError as e:
             raise LLMTimeout(f"no response from {model} within {TIMEOUT_S:.0f}s") from e
-    return json.loads(data["choices"][0]["message"]["content"])
+    return json.loads(_text_of(data, model))
+
+
+def _text_of(data: dict, model: str) -> str:
+    """The completion's text, or a named error. A missing/empty `content` used to surface as
+    KeyError('content'), which told ops nothing — say which finish_reason produced nothing."""
+    choice = (data.get("choices") or [{}])[0]
+    text = ((choice.get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise LLMEmptyResponse(f"{model} returned no text (finish_reason={choice.get('finish_reason')!r}, "
+                               f"usage={data.get('usage')}); the completion was truncated or spent its budget thinking")
+    return text
+
+
+def anthropic_chat_json(system: str, messages: list[dict]) -> dict:
+    """Anthropic Messages API, free-form JSON (the agent protocol is a union the schema mode cannot express)."""
+    import anthropic
+
+    client = anthropic.Anthropic(timeout=TIMEOUT_S, max_retries=0)
+    response = client.messages.create(model=os.environ.get("LLM_MODEL") or DEFAULT_MODEL, max_tokens=4000,
+                                      system=system, messages=messages)
+    if response.stop_reason == "refusal":
+        raise RuntimeError("LLM refused the request")
+    text = "".join(b.text for b in response.content if b.type == "text").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
+    if not text:
+        raise LLMEmptyResponse(f"{active_model()} returned no text (stop_reason={response.stop_reason!r})")
+    return json.loads(text)
+
+
+def agent_llm_call(system: str, messages: list[dict]) -> dict:
+    """The agent's one call shape: primary provider, then the failover provider for the same kinds
+    Stage C fails over on. Raises LLMError (classified) when both are out."""
+    if not llm_configured():
+        err = LLMError("no LLM key configured (set ANTHROPIC_API_KEY, or LLM_API_KEY + LLM_BASE_URL)")
+        err.kind = "not_configured"
+        raise err
+    try:
+        if llm_provider() == "anthropic":
+            return anthropic_chat_json(system, messages)
+        return chat_json(system, messages, primary_cfg())
+    except Exception as exc:
+        fcfg = fallback_cfg()
+        if fcfg and classify(exc) in FAILOVER_KINDS:
+            with _fallback_lock:
+                return chat_json(system, messages, fcfg)
+        raise
 
 
 def anthropic_call(payload: dict) -> dict:

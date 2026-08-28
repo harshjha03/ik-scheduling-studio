@@ -24,6 +24,7 @@ interface Props {
   onOpen: (sessionId: string) => void;
   onGhost: (sessionId: string) => void;
   onEditSme: (smeId: string) => void;
+  onReportOut: (smeId: string) => void;
   onImportSmes: () => void;
 }
 
@@ -35,7 +36,7 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 
 export default function SmeManagement({
   smes, rows, courses, meta, weeks, week, weekDates, approved, selected, leave, query, filter, vh,
-  onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onImportSmes,
+  onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onReportOut, onImportSmes,
 }: Props) {
   const shown = smes.filter((s) => smeMatches(s, rows, query, filter, leave));
   const sel = smes.find((s) => s.id === selected) ?? shown[0] ?? smes[0];
@@ -197,9 +198,14 @@ export default function SmeManagement({
                       </span>
                     </td>
                     <td style={{ ...td, paddingRight: 20, textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                      <button className="btn btn-sm" onClick={() => onEditSme(s.id)} title="Edit profile basics">
-                        Edit
-                      </button>
+                      <span className="inline-flex gap-[6px]">
+                        <button className="btn btn-sm" onClick={() => onReportOut(s.id)} title="Teacher dropped out — let the copilot find cover">
+                          Report unavailable…
+                        </button>
+                        <button className="btn btn-sm" onClick={() => onEditSme(s.id)} title="Edit profile basics">
+                          Edit
+                        </button>
+                      </span>
                     </td>
                   </tr>
                 );

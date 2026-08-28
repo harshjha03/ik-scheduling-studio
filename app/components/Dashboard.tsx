@@ -29,6 +29,7 @@ interface Props {
   onBatchFilter: (v: string) => void;
   onStatusToggle: (k: Category) => void;
   onOpenWork: () => void;
+  onAskCopilot: () => void;
   onApproveWeek: () => void;
   onOpen: (sessionId: string) => void;
   onOpenOverride: (o: OverrideEvent) => void;
@@ -37,7 +38,7 @@ interface Props {
 export default function Dashboard({
   rows, allRows, batches, courses, meta, weeks, week, weekDates, tab, approved, changed, batchFilter, statusOff,
   workCount, published, overrides, loading, vh, smeName, onTab, onBatchFilter, onStatusToggle,
-  onOpenWork, onApproveWeek, onOpen, onOpenOverride,
+  onOpenWork, onAskCopilot, onApproveWeek, onOpen, onOpenOverride,
 }: Props) {
   const locked = weeks[week].locked;
   const unfilled = allRows.filter((r) => !r.sme_id).length;
@@ -66,6 +67,11 @@ export default function Dashboard({
           )}
           {/* No manual re-run control: the design has none, and every action that invalidates the
               draft (override, added class, drop-out, availability change) re-runs it on its own. */}
+          {!locked && (
+            <button className="btn" onClick={onAskCopilot} title="Ask about this week's draft — answers come live from the engine">
+              Ask the copilot
+            </button>
+          )}
           <button className="btn btn-soft flex items-center gap-2" onClick={onOpenWork} title="Unfilled classes, conflicts and workload flags for this week">
             <span>Work items</span>
             <span

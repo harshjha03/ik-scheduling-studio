@@ -1,4 +1,6 @@
-import type { ApprovalsResult, Decision, DraftRow, HistoryRecord, OverrideEvent, RunResult, Session, SME } from "./types";
+import type {
+  AgentApplyResult, AgentMove, AgentRequest, AgentResult, ChatTurn, ApprovalsResult, Decision, DraftRow, HistoryRecord, OverrideEvent, RunResult, Session, SME,
+} from "./types";
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -49,4 +51,20 @@ export async function loadSchedule(week: string): Promise<SavedSchedule | null> 
   const res = await fetch(`/api/schedule?week=${encodeURIComponent(week)}`);
   if (!res.ok) throw new Error(`/api/schedule → ${res.status}`);
   return res.json();          // null when nothing has been saved for that week yet
+}
+
+/** The copilot reasons over the draft the page holds — nothing is applied by this call. */
+export function agentRun(
+  week: string, req: AgentRequest, draft: DraftRow[], smes: SME[], history: HistoryRecord[], turns?: ChatTurn[],
+) {
+  return post<AgentResult>("/api/agent/run", {
+    week, mode: req.mode, sme_id: req.smeId, days: req.days?.length ? req.days : null, question: req.question,
+    // only role + content travel: the server re-derives everything else from the draft it is sent
+    turns: turns?.map((t) => ({ role: t.role, content: t.content })), draft, smes, history,
+  });
+}
+
+/** Applies through the engine's override path with actor `agent`; Stage D re-validates server-side. */
+export function agentApply(week: string, plan: AgentMove[], draft: DraftRow[], smes: SME[], history: HistoryRecord[]) {
+  return post<AgentApplyResult>("/api/agent/apply", { week, plan, actor: "agent", auto: false, draft, smes, history });
 }

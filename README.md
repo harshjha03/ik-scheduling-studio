@@ -88,7 +88,9 @@ Or, with a linked Vercel project, `vercel dev` runs both the Next app and the Py
 | `LLM_FALLBACK_MODEL` (+ optional `LLM_FALLBACK_API_KEY`, `LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_CHUNK`, `LLM_FALLBACK_EXTRA_BODY`) | Option C — failover. A chunk whose primary call fails on `daily_quota_exhausted` / `rate_limited` / `timeout` is retried on the fallback before the deterministic fallback. Set only `LLM_FALLBACK_MODEL` to use a second model on the primary key (e.g. `gemini-3.7-flash` — a separate 20/day bucket that rescues the whole queue); set `LLM_FALLBACK_API_KEY` for a different provider (default Groq `openai/gpt-oss-20b`, 12-item sub-chunks). `stats.llm.failover` reports what it rescued; the dashboard banner turns amber ("handled by fallback provider") instead of red. Best-effort: Groq's free tier caps tokens per minute (~8k), so a full 80-row queue (~22k tokens) is rescued only partially per run; the rest fall back deterministically and the message says so. |
 | `LLM_EXTRA_BODY` | JSON merged into the OpenAI-compatible request body, e.g. `{"reasoning_effort":"low"}` for Gemini (measured: 12-item chunk 15s → 5.5s, same decisions). |
 | `LLM_CHUNK` / `LLM_PARALLEL` / `LLM_TIMEOUT` | Tuning (defaults 20 items per call, 4 concurrent calls, 45s). Free tiers rate-limit requests per minute, so prefer fewer, larger calls (Gemini: `LLM_CHUNK=40` → 2 calls for the ~80-item queue). One 429 retry honours `Retry-After`; anything still failing falls back per chunk with the provider's message in `stats.llm.error`. |
-| *(nothing)* | Stage C is skipped; every exception-queue row is resolved by the Stage B top score with an `LLM_FALLBACK` flag. The whole demo works without any key. |
+| `AGENT_AUTO_APPLY` | Copilot autonomy gate, **server-side and off by default**. `POST /api/agent/apply` with `auto: true` returns **403** unless this is `1`. Either way Stage D re-validates the week after the apply — the flag buys a click, never a rule. |
+| `AGENT_MAX_TOOL_CALLS` / `AGENT_MAX_LLM_TURNS` / `AGENT_WALL_CLOCK` | Copilot budgets (defaults 8 tool calls, 6 LLM turns, 60s — inside Vercel's 120s). Enforced in `engine/agent.py`, never trusted to the model; on exhaustion the run returns `status: budget_exhausted` with its partial findings, never an error page. |
+| *(nothing)* | Stage C is skipped; every exception-queue row is resolved by the Stage B top score with an `LLM_FALLBACK` flag. The copilot answers from the deterministic floor and labels itself `fallback`. The whole demo works without any key. |
 
 Stage C failures are classified, never silent: `stats.llm.error_kind` is one of
 `daily_quota_exhausted | rate_limited | provider_unavailable | timeout | provider_error | not_configured`, `stats.llm.message`
@@ -170,6 +172,123 @@ one it is. Plain SQL, two placeholder styles, no ORM and no migration step — t
   credentials, reports `simulated` where it doesn't, records the outcome either way.
 - `GET /api/publish/log?week=` — what was sent, when, and whether it was live.
 - `GET|POST /api/schedule` — save/load the week (`{week, draft, ...}`); `null` when nothing is saved.
+- `POST /api/agent/run` — the Recovery & Review Copilot. `{week, mode: recovery|review|chat, sme_id?, days?, question?, turns?, draft, smes, history}`
+  (`chat` is the floating copilot: `question` is the new turn, `turns` the prior `{role, content}` conversation)
+  → `{status: ok|budget_exhausted|fallback, answer, plan, transcript, simulation, meta}`. `plan` moves are
+  `{session_id, from_sme, to_sme, reason, verdict}`; `transcript` is every tool call with a one-line result
+  digest. Nothing is applied here.
+- `POST /api/agent/apply` — staffing moves only (a `reschedule`/`upgrade` entry is a **422**: those change
+  the sessions and the roster, which the client owns and re-runs the pipeline over — silently ignoring them
+  would report success for a change that never happened). `{week, plan, actor, auto, draft, smes, history}` → the draft payload plus
+  `{override_log, applied, diff}`. Every move goes through the same `apply_approvals` override path a human
+  click uses (actor `agent`, shown as **Copilot** in the overrides log) and Stage D re-validates the week.
+  A plan that no longer simulates clean against the current draft is refused with **409**, not written;
+  `auto: true` without `AGENT_AUTO_APPLY=1` is refused with **403**.
+
+## The copilot: three ways in, one engine
+
+| Surface | Mode | Opens from |
+|---|---|---|
+| Floating **✦ Copilot** button (bottom-right, coordinator only) | `chat` | always on screen — free text, multi-turn, remembers the conversation |
+| **Report unavailable…** on an SME row | `recovery` | pre-filled with that teacher; pick days |
+| **Ask the copilot** on the dashboard | `review` | one question about the draft |
+
+All three run the same loop over the same toolbox and render the same two things: **Show working** (every
+tool call with its result) and a **plan card** (one line per move, verdict pill per move). Only the chat
+carries state between turns.
+
+### "Nobody is eligible" is not an answer
+
+Spec rule 5 says a clear no with a reason is a successful outcome. True, but incomplete: a coordinator
+reading *"unfortunately nobody can take these two classes"* still has to do all the thinking. Two
+additions close that gap, and `OPTIONS_ADDENDUM` in `engine/agent.py` makes the model use them:
+
+- every blocked teacher now carries a `detail` naming the **nearest miss** — "already teaching ML-01 at
+  that hour — free them and they qualify", "needs a training-level upgrade to 3", "free that day, but
+  Sat 15:00 is outside their working hours";
+- `find_slots(session_id)` searches **every other hour this week** for one where somebody *is* eligible,
+  ranked by least disruption (same day first, then nearest hour), skipping hours the batch already has a
+  class in. Stage A decides eligibility, exactly as for the real slot.
+
+So the seeded unfillable class stops being a dead end. Measured, live, on the same question:
+
+```
+ML-02 · Mon 16:00 · ML System Design
+- Move to Mon 13:00, 14:00, 15:00, 17:00, or 19:00 — Priya Menon can take it (recommended)
+
+DSA-01 · Sat 15:00 · Dynamic Programming
+- No eligible teacher available at this time
+- You can upgrade Rohan Mehta or Vikram Rao to level 3 to make them eligible
+- Or move the class to a time when Ananya Iyer is free
+```
+
+Rescheduling and level upgrades are the coordinator's to make — the copilot names them and says so (O4).
+
+An answer covering more than one class is written as a label line per subject and one `- ` option line
+each (chat rule C1); `AnswerText` in `AgentSheet.tsx` renders exactly those three cases — label, option,
+blank line — and nothing else. There is no markdown renderer, because the prompt forbids markdown; a
+model that ignores that would show its own asterisks, which is the honest failure mode. Two things the
+live run taught, both now enforced: `plan` is only ever staffing moves (O4b — the model tried filing
+reschedule options there, and they are salvaged into the answer rather than dropped), and the transcript
+digest for `find_slots` names the slots so the working reads as evidence.
+
+### What it can actually implement
+
+The copilot does not only advise. A plan may carry three kinds of entry, mixed freely, and one **Apply**
+executes the lot:
+
+| Entry | What it changes | How it is applied |
+|---|---|---|
+| `move` | who teaches a class | `apply_approvals` override path, actor `agent` → Stage D re-validates |
+| `reschedule` | which hour a class runs at | edits the session, then the **whole pipeline re-runs** (Stage A–D from scratch) |
+| `upgrade` | a teacher's training level | edits the roster, then the whole pipeline re-runs |
+
+Guardrails, all server-side and all simulated before the coordinator ever sees the plan:
+
+- a reschedule may only name a slot `find_slots` actually returned, must stay inside the week's teaching
+  hours, and must not double-book the batch;
+- an upgrade may only target a teacher a tool result showed as **blocked by training level**, may not
+  exceed the level the class requires, and must unblock a class that *needs* a teacher — one that merely
+  qualifies someone for classes already staffed returns `breaks:changes_nothing`;
+- everything else — publishing, e-mail, export, creating classes, editing profiles, an override that
+  breaks a hard rule — is refused and described in words, never faked.
+
+Measured end to end in the browser, live: *"implement the fix for the classes without a teacher"* →
+two `reschedule` entries → Apply → **2 unfilled classes → 0**, both logged as Copilot.
+
+### Sweeping the whole week in one turn
+
+Asked to *"solve all the pending issues"*, the copilot spent its eight tool calls calling
+`get_candidates` row by row, never reached an answer, and told the coordinator to **start a new
+session** — which is not even true, since the budget is per message. Two fixes, no change to the
+spec's 8/6 budgets:
+
+- **`get_issues {codes?, limit?}`** returns every flagged class *with its fix material* in one call —
+  blockers, candidates, and (only where nothing is eligible, because that search is expensive) the
+  swaps and slots that would work. Ordered by urgency: unstaffed first, then classes held by a teacher
+  reported unavailable, then by flag priority. A class whose teacher just dropped out carries no flag
+  yet and is still the week's top issue, so it appears here too.
+- the last-step nudge now says the budget is **per message** and forbids suggesting a new session.
+
+A six-issue sweep now costs **2 tool calls** and returns one mixed plan (moves + reschedules), each
+entry simulated. `RESULT_CHARS` is 12k because a whole-week triage is ~7KB — truncating that mid-JSON
+hands the model a broken object, which is worse than a longer prompt.
+
+Related: a reply like `{"answer": "..."}` used to be rejected twice and shown as a fallback banner.
+The parser is now lenient about a *finished answer* (`answer`/`message`/`text`, a bare string, `final`
+as a string) and still strict about anything that acts — a conversational turn is an answer, not a
+protocol error.
+
+The chat can do two kinds of work. Questions it answers from the engine. Tasks it performs by *proposing*:
+say "Priya is out Wednesday" and it calls `report_unavailable` — which binds that drop-out for the rest of
+the run, so nobody is offered her slot and no move can hand work back to her — then searches replacements
+and swap chains and hands you a plan. **It cannot publish, e-mail, export, create batches or edit profiles**
+(rule C4 in `CHAT_ADDENDUM`); asked for one of those it says so and names the button that does it. The one
+change it can make is a staffing plan you apply, through the same override path a manual change uses.
+
+Budget note: `AGENT_MAX_LLM_TURNS` (6) is deliberately smaller than `AGENT_MAX_TOOL_CALLS` (8), so a run
+that keeps exploring would never answer. The loop warns the model on its final turn to reply with `final`
+now — without that, a normal question like "who is overloaded?" came back `budget_exhausted`.
 
 ## Publishing: how a week reaches people
 
@@ -258,10 +377,11 @@ plus that the current week is fully staffed).
 Three layers, all runnable locally:
 
 ```bash
-pytest -q                # 43 engine tests: stages A–E, LLM failure paths, seed-data invariants
-npm run test:flows       # 95 browser checks: the three personas + the v3 features
+pytest -q                # 134 tests: stages A–E, LLM failure paths, seed invariants, the copilot
+npm run test:flows       # 129 browser checks: the three personas, the v3 features, the copilot
 npm run test:flows -- sme
 npm run test:flows -- features    # ops assist, publish, un-publish on edit, add a class
+npm run test:flows -- copilot     # report out -> transcript -> plan -> apply -> Copilot in the log, and the floating chat
 ```
 
 `scripts/flow_test.js` drives Chrome over the DevTools Protocol with no dependencies (node's global
@@ -273,6 +393,14 @@ approval; the student's read-only schedule; and the v3 features end to end — a
 ops approves it, undo reverts it; publishing is refused while a class is unfilled, then sends on
 every channel; editing after that un-publishes the week. The engine tests guard the rules, these
 guard what each persona can actually see and do.
+
+The copilot's own tests script the LLM (`tests/test_agent.py`) and never touch the network: happy path,
+depth-2 swap chain, invalid tool → one retry → `AGENT_FALLBACK` floor, an ineligible pick stripped with the
+reason, budget exhaustion, the 403 on unauthorised auto-apply, and the two invariants that make the feature
+safe — **provenance** (every `to_sme` in a returned plan appeared in a `get_candidates` / `find_freeable`
+result during that run) and **no returned plan breaks a hard rule** (it is re-simulated after assembly).
+The browser section runs with or without a key: with one the transcript shows the model's real steps, without
+one it shows the labelled fallback — a fallback is never dressed up as a copilot answer.
 
 ## Notes and deliberate simplifications
 

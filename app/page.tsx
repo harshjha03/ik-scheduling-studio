@@ -10,12 +10,14 @@ import coursesJson from "@/data/courses.json";
 import weeksJson from "@/data/weeks.json";
 import metaJson from "@/data/meta.json";
 import type {
+  AgentMove, AgentMoveAction, AgentRequest, AgentResult, ChatTurn,
   Batch, Category, Course, Decision, DraftRow, Fix, HistoryRecord, LeafId, Meta, ModuleKey, NewClass, OverrideEvent,
   Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
 import {
-  loadSchedule, publishLeaf, runMatching, saveSchedule, submitApprovals,
+  agentApply, agentRun, loadSchedule, publishLeaf, runMatching, saveSchedule, submitApprovals,
 } from "@/lib/api";
+import { isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { csvExporter } from "@/lib/export";
 import {
   classTemplate, downloadCsv, emptyImport, isWorkbook, parseClassImport, parseSmeImport, smeTemplate, toSme,
@@ -35,6 +37,8 @@ import Sheet, { PersonRow, SectionLabel } from "./components/Sheet";
 import WorkSheet from "./components/WorkSheet";
 import PublishSheet from "./components/PublishSheet";
 import ImportSheet from "./components/ImportSheet";
+import AgentSheet from "./components/AgentSheet";
+import CopilotChat from "./components/CopilotChat";
 import Toast from "./components/Toast";
 
 // JSON imports infer over-narrow literal unions; the engine owns the schema.
@@ -98,6 +102,16 @@ export default function Page() {
   const [pubSel, setPubSel] = useState<Record<string, boolean>>(ALL_LEAVES);
   const [pubStatus, setPubStatus] = useState<Record<string, SendState>>({});
   const [vh, setVh] = useState(900);
+  // Recovery & Review Copilot — request, last result, in-flight flag (all owned here, rendered by AgentSheet)
+  const [agentReq, setAgentReq] = useState<AgentRequest>({ mode: "review" });
+  const [agentRes, setAgentRes] = useState<AgentResult | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  // session_id -> new start_utc, from a copilot reschedule the coordinator applied
+  const [sessionEdits, setSessionEdits] = useState<Record<string, string>>({});
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextRef = useRef<DraftRow[] | null>(null);
   const pubToken = useRef(0);
@@ -127,13 +141,16 @@ export default function Page() {
 
   const smesFor = useCallback((w: WeekKey): SME[] => rosterFor(w), [rosterFor]);
 
-  const sessionsFor = useCallback((w: WeekKey): Session[] => (
-    w === "next" ? [...SESSIONS.next, ...extraSessions] : SESSIONS.current
-  ), [extraSessions]);
+  /** Seeded sessions plus anything ops added, with copilot reschedules folded in. A reschedule only
+   *  changes when a class runs, so it is an edit layer over the fixtures — not a new session. */
+  const sessionsFor = useCallback((w: WeekKey, edits: Record<string, string> = sessionEdits): Session[] => {
+    const list = w === "next" ? [...SESSIONS.next, ...extraSessions] : SESSIONS.current;
+    return list.map((x) => (edits[x.id] ? { ...x, start_utc: edits[x.id] } : x));
+  }, [extraSessions, sessionEdits]);
 
   /** Draft the next week on top of the settled current week. */
   const runNext = useCallback(async (opts: {
-    overrides?: OverrideEvent[]; sessions?: Session[];
+    overrides?: OverrideEvent[]; sessions?: Session[]; smes?: SME[];
     availOff?: Record<string, boolean>; quiet?: boolean;
   } = {}) => {
     const cur = runs.current;
@@ -141,7 +158,7 @@ export default function Page() {
     setLoading(true);
     try {
       const blocks = opts.availOff ?? availOff;
-      const roster = rosterFor("next");
+      const roster = opts.smes ?? rosterFor("next");
       const smes = roster.map((s) => (s.id === META.me ? applyAvailabilityBlocks(s, blocks) : s));   // the SME's own blocks
       const history = weekAsHistory(cur.draft, roster, WEEKS.current.iso, HISTORY);
       const sessions = opts.sessions ?? sessionsFor("next");
@@ -630,6 +647,160 @@ export default function Page() {
     say(`${nextOff[key] ? "Block marked off" : "Block re-opened"} — next week re-drafted, you now have ${mine} class(es).`);
   };
 
+  // ---------- copilot ----------
+
+  const openAgent = (req: AgentRequest) => {
+    setAgentReq(req);
+    setAgentRes(null);
+    setWeek("next");
+    setSheet({ kind: "agent" });
+  };
+
+  const runAgent = async () => {
+    const nxt = runs.next;
+    if (!nxt || !runs.current) return;
+    setAgentBusy(true);
+    try {
+      const roster = rosterFor("next");
+      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, HISTORY);
+      setAgentRes(await agentRun(WEEKS.next.iso, agentReq, nxt.draft, roster, history));
+    } catch (e) {
+      say(String(e).slice(0, 160));
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
+  /** Every move goes through the engine's override path server-side (actor `agent`), Stage D re-validates,
+   *  and the result replaces the draft — exactly what a manual override does, logged as the Copilot. */
+  const applyPlan = async (plan: AgentMoveAction[], draft?: DraftRow[]): Promise<boolean> => {
+    const nxt = runs.next;
+    if (!nxt || !runs.current || !plan.length) return false;
+    const base = draft ?? nxt.draft;
+    try {
+      const roster = rosterFor("next");
+      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, HISTORY);
+      const out = await agentApply(WEEKS.next.iso, plan, base, roster, history);
+      const at = new Date().toISOString();
+      nextRef.current = out.draft;
+      setRuns((s) => ({ ...s, next: { draft: out.draft, flags: out.flags, stats: { ...nxt.stats, ...out.stats } as RunResult["stats"] } }));
+      setChanged(new Set(out.applied));
+      setOverrides((log) => [...out.override_log.map((e): OverrideEvent => ({
+        kind: e.from_sme_id ? "teacher change" : "assigned", session_id: e.session_id, batch_id: e.batch_id, week: "next",
+        from_sme_id: e.from_sme_id, to_sme_id: e.to_sme_id, to_sme_name: e.to_sme_name, at, actor: "Copilot",
+        note: `${e.reason ?? "Copilot plan"} — applied via the override path and re-validated by Stage D.`,
+      })), ...log]);
+      setApproved((a) => new Set([...a].filter((id) => !out.applied.includes(id))));
+      setDecisions((d) => ({ ...d, ...Object.fromEntries(out.override_log.map((e) => [e.session_id,
+        { session_id: e.session_id, action: "override" as const, override_sme_id: e.to_sme_id }])) }));
+      if (published.next) setPublished((p) => ({ ...p, next: false }));
+      void saveSchedule(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }).catch(() => {});
+      return true;
+    } catch (e) {
+      say(String(e).slice(0, 160));
+      return false;
+    }
+  };
+
+  /** Reschedules and upgrades change the source data, so they are applied here and the whole pipeline
+   *  re-runs over them — Stage A–D from scratch, which is a stronger check than validating in place.
+   *  Staffing moves then go through the override route against that fresh draft. */
+  const applyActions = async (plan: AgentMove[]): Promise<boolean> => {
+    const moves = plan.filter(isMove);
+    const reschedules = plan.filter(isReschedule);
+    const upgrades = plan.filter(isUpgrade);
+    const at = new Date().toISOString();
+    let draftRows = runs.next?.draft ?? [];
+
+    if (reschedules.length || upgrades.length) {
+      const edits = { ...sessionEdits, ...Object.fromEntries(reschedules.map((r) => [r.session_id, r.start_utc])) };
+      const nextEdits: Record<string, Partial<SME>> = { ...smeEdits };
+      upgrades.forEach((u) => {
+        nextEdits[u.sme_id] = { ...nextEdits[u.sme_id], training_level: u.to_level, level: META.levels[u.to_level - 1] };
+      });
+      const roster = [...SMES.next, ...extraSmes].map((x) => (nextEdits[x.id] ? { ...x, ...nextEdits[x.id] } : x));
+      setSessionEdits(edits);
+      setSmeEdits(nextEdits);
+      setOverrides((log) => [
+        ...reschedules.map((r): OverrideEvent => ({
+          kind: "teacher change", session_id: r.session_id,
+          batch_id: draftRows.find((x) => x.session_id === r.session_id)?.batch_id ?? "—", week: "next",
+          from_sme_id: null, to_sme_id: "", to_sme_name: `${r.to_day} ${r.to_hour_ist}`, at, actor: "Copilot",
+          note: `Class moved from ${r.from_day} ${r.from_hour_ist} to ${r.to_day} ${r.to_hour_ist} — ${r.reason || "copilot plan"}.`,
+        })),
+        ...upgrades.map((u): OverrideEvent => ({
+          kind: "assigned", session_id: u.unblocks?.[0] ?? "", batch_id: "roster", week: "next",
+          from_sme_id: null, to_sme_id: u.sme_id, to_sme_name: u.sme_name, at, actor: "Copilot",
+          note: `Training level raised ${u.from_level} → ${u.to_level} — ${u.reason || "copilot plan"}.`,
+        })),
+        ...log,
+      ]);
+      const res = await runNext({ sessions: sessionsFor("next", edits), smes: roster, quiet: true });
+      if (!res) return false;
+      draftRows = res.draft;
+      // runNext diffs teacher and flags; a class that only changed hour would otherwise show no dot
+      if (reschedules.length) {
+        setChanged((c) => new Set([...c, ...reschedules.map((r) => r.session_id)]));
+      }
+    }
+
+    if (moves.length) {
+      // the fresh draft may already have staffed a rescheduled class; only send moves that still apply
+      const live = moves.filter((m) => draftRows.some((r) => r.session_id === m.session_id && r.sme_id !== m.to_sme));
+      if (live.length && !(await applyPlan(live, draftRows))) return false;
+    }
+    if (published.next) setPublished((p) => ({ ...p, next: false }));
+    const n = moves.length + reschedules.length + upgrades.length;
+    say(`Copilot plan applied — ${n} change${n === 1 ? "" : "s"}.`);
+    return true;
+  };
+
+  const applyAgentPlan = async () => {
+    if (!agentRes?.plan?.length) return;
+    setAgentBusy(true);
+    const ok = await applyActions(agentRes.plan);
+    setAgentBusy(false);
+    if (ok) {
+      setSheet(null);
+      setAgentRes(null);
+      setMod("dashboard");
+    }
+  };
+
+  /** The floating chat: one turn in, one turn out, the whole conversation replayed server-side. */
+  const sendChat = async () => {
+    const text = chatDraft.trim();
+    const nxt = runs.next;
+    if (!text || !nxt || !runs.current) return;
+    const history0 = chatTurns;
+    setChatTurns((t) => [...t, { role: "user", content: text }]);
+    setChatDraft("");
+    setChatBusy(true);
+    try {
+      const roster = rosterFor("next");
+      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, HISTORY);
+      const res = await agentRun(WEEKS.next.iso, { mode: "chat", question: text }, nxt.draft, roster, history, history0);
+      setChatTurns((t) => [...t, { role: "assistant", content: res.answer, res }]);
+    } catch (e) {
+      setChatTurns((t) => [...t, { role: "assistant", content: `That did not go through — ${String(e).slice(0, 140)}` }]);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const applyChatPlan = async (index: number) => {
+    const turn = chatTurns[index];
+    if (!turn?.res?.plan?.length || turn.applied) return;
+    setChatBusy(true);
+    const ok = await applyActions(turn.res.plan);
+    setChatBusy(false);
+    if (ok) {
+      setChatTurns((t) => t.map((x, i) => (i === index ? { ...x, applied: true } : x)));
+      setMod("dashboard");
+      setTab("schedule");
+    }
+  };
+
   // ---------- sheets ----------
 
   const sheetRow = sheet && (sheet.kind === "class" || sheet.kind === "ghost")
@@ -809,6 +980,37 @@ export default function Page() {
             {field("Classes a week", "The scheduler treats this as a soft cap",
               <input className="field w-full" type="number" min={1} max={8} value={prof.preferred} onChange={set("preferred")} />)}
           </div>
+        </Sheet>
+      );
+    }
+
+    if (sheet.kind === "agent") {
+      const recovery = agentReq.mode === "recovery";
+      const who = rosterFor("next").find((x) => x.id === agentReq.smeId);
+      const applicable = !!agentRes?.plan?.length;
+      const close = () => { if (!agentBusy) { setSheet(null); setAgentRes(null); } };
+      return (
+        <Sheet
+          width={640} eyebrow={`Copilot · ${WEEKS.next.label} · ${WEEKS.next.range}`}
+          title={recovery ? `Cover for ${who?.name ?? "a teacher"}` : "Ask the copilot"}
+          subtitle={recovery
+            ? "Say who is out and when. The copilot searches replacements and swap chains, then simulates every move before proposing it."
+            : "Ask about this week's draft — unfilled classes, workload, the least disruptive fix. Answers come from the engine, not from memory."}
+          footerNote={agentRes
+            ? applicable ? "Applying routes every move through the override path; Stage D re-validates the week." : "Nothing to apply."
+            : "Nothing is changed until you apply a plan."}
+          footer={[
+            { label: "Dismiss", onClick: close, disabled: agentBusy },
+            ...(agentRes ? [{ label: "Ask again", kind: "quiet" as const, onClick: () => setAgentRes(null), disabled: agentBusy }] : []),
+            ...(applicable ? [{ label: agentBusy ? "Applying…" : `Apply plan · ${agentRes!.plan!.length}`, kind: "go" as const, onClick: () => void applyAgentPlan(), disabled: agentBusy }] : []),
+          ]}
+          onClose={close}
+        >
+          <AgentSheet
+            req={agentReq} res={agentRes} busy={agentBusy} smes={rosterFor("next")} rows={runs.next?.draft ?? []} days={META.days}
+            onReq={(patch) => setAgentReq((r) => ({ ...r, ...patch }))}
+            onRun={() => void runAgent()}
+          />
         </Sheet>
       );
     }
@@ -1184,6 +1386,7 @@ export default function Page() {
             onTab={setTab} onBatchFilter={setBatchFilter}
             onStatusToggle={(k: Category) => setStatusOff((s) => ({ ...s, [k]: !s[k] }))}
             onOpenWork={() => setSheet({ kind: "work" })}
+            onAskCopilot={() => openAgent({ mode: "review", question: "" })}
             onApproveWeek={approveWeek}
             onOpen={openClass}
             onOpenOverride={(o) => { setWeek(o.week); setTab("schedule"); setSheet({ kind: "class", sessionId: o.session_id, week: o.week, stage: "info" }); }}
@@ -1199,6 +1402,7 @@ export default function Page() {
           onQuery={setSmeQuery} onFilter={setSmeFilter} onSelect={setSelSme} onOpen={openClass}
           onGhost={(sessionId) => setSheet({ kind: "ghost", sessionId, week, smeId: selSme })}
           onEditSme={openProfile}
+          onReportOut={(id) => openAgent({ mode: "recovery", smeId: id, days: [] })}
           onImportSmes={() => { setSmeImp(emptyImport()); setSheet({ kind: "smeImport" }); }}
         />
       );
@@ -1287,6 +1491,15 @@ export default function Page() {
         </div>
       </main>
       {renderSheet()}
+      {role === "coordinator" && !!runs.next && (
+        <CopilotChat
+          open={chatOpen} turns={chatTurns} draft={chatDraft} busy={chatBusy}
+          smes={rosterFor("next")} rows={runs.next.draft} days={META.days}
+          onOpen={setChatOpen} onDraft={setChatDraft} onSend={() => void sendChat()}
+          onApply={(i) => void applyChatPlan(i)}
+          onReset={() => { setChatTurns([]); setChatDraft(""); }}
+        />
+      )}
       <Toast text={toast} />
     </div>
   );

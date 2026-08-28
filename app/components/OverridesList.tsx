@@ -32,6 +32,11 @@ export default function OverridesList({ log, smeName, onOpen }: {
             >
               {o.kind}
             </span>
+            {o.actor === "Copilot" && (
+              <span className="shrink-0 rounded-[9px] px-[9px] py-1 text-[10px] font-bold" style={{ background: "var(--brand-tint)", color: "var(--brand-deep)", letterSpacing: "0.03em" }} title="applied by the Recovery & Review Copilot">
+                Copilot
+              </span>
+            )}
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-semibold">
                 {o.batch_id} · {o.session_id} — {o.from_sme_id ? `${smeName(o.from_sme_id)} → ` : "assigned "}
@@ -42,7 +47,9 @@ export default function OverridesList({ log, smeName, onOpen }: {
                 className="mt-[3px] text-[11.5px]"
                 style={{ color: o.reverted ? "var(--red-ink)" : "var(--brand-deep)", fontWeight: o.reverted ? 650 : 400 }}
               >
-                {o.changed_rows === undefined
+                {o.actor === "Copilot"
+                  ? "applied through the override path · Stage D re-validated the week"
+                  : o.changed_rows === undefined
                   ? "pending re-run — −0.2 on the old pairing, +0.1 on yours"
                   : o.reverted
                     ? `re-run could not keep ${o.to_sme_name} — the pick breaks a hard rule, so the class went back to the pipeline`
