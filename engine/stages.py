@@ -218,6 +218,8 @@ def stage_b_score(session: dict, survivors: list[dict], smes: list[dict], hist: 
     adjust = adjust or {}
     pool = subject_pool(smes, session["subject"])
     loads = {s["id"]: projected_load(s["id"], hist, draft_counts) for s in pool}
+    if not loads:
+        return []      # no SME in the pool teaches this subject at all: no candidates, not a crash
     lo, hi = min(loads.values()), max(loads.values())
     topic = topic_of(session)
     out = []

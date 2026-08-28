@@ -608,3 +608,39 @@ def test_seed_approvals_override_risk_and_export_columns(seed):
     assert list(out["export_rows"][0]) == ["week", "date", "time_ist", "batch", "subject", "sub_specialty",
                                             "session_type", "sme_name", "status", "flags"]
     assert out["export_rows"][0]["week"] == "2026-W37"       # next week
+
+
+def _api():
+    """The FastAPI module, imported without letting its dotenv.load leak real credentials into the
+    rest of the suite (test_malformed_json_env_does_not_crash asserts on dotenv behaviour)."""
+    from engine import dotenv as _dotenv
+    real, _dotenv.load = _dotenv.load, lambda path: 0
+    os.environ["DATABASE_URL"] = ""
+    os.environ.setdefault("IK_DB_PATH", "/tmp/ik-engine-test.db")
+    try:
+        from api import index
+        return index
+    finally:
+        _dotenv.load = real
+
+
+def test_unknown_subject_returns_unfilled_not_crash():
+    """A session for a subject nobody in the pool teaches is the limit form of "no qualified SME".
+    Stage A always caught it; the final candidate-recompute loop then crashed on an empty subject pool."""
+    smes = rd("smes")
+    sess = dict(rd("sessions_next")[0], id="X1", subject="QUANTUM", sub_specialty=None)
+
+    # the scorer itself: an empty pool is no candidates, not a ValueError
+    assert S.stage_b_score(sess, [], smes, S.build_hist([], smes), {}) == []
+
+    res = run_pipeline([sess], smes, [], [], llm_enabled=False)
+    row = res["draft"][0]
+    assert row["sme_id"] is None and row["candidates"] == []
+    unfilled = [f for f in row["flags"] if f["code"] == "UNFILLED"]
+    assert len(unfilled) == 1 and "no QUANTUM SMEs in the pool" in unfilled[0]["reason"]
+    assert res["stats"]["unfilled"] == 1
+
+    # and the route that used to 500 answers normally
+    out = _api().run({"sessions": [sess], "smes": smes, "history": [], "overrides": [], "llm": False})
+    assert out["stats"]["unfilled"] == 1
+    assert out["draft"][0]["flags"][0]["code"] == "UNFILLED"
