@@ -69,6 +69,20 @@ def integrations():
                     "model": os.environ.get("LLM_MODEL")}}
 
 
+@app.post("/api/availability/sync")
+def availability_sync(body: dict = Body(...)):
+    """Read each teacher's calendar for the week and hand back the roster with `external_busy` set.
+    Stage A then eliminates a busy teacher with rule `calendar_busy`, and Stage D re-checks it."""
+    smes = body.get("smes")
+    if not isinstance(smes, list) or not smes:
+        raise HTTPException(422, "`smes` must be a non-empty list")
+    for key in ("week_start_utc", "week_end_utc"):
+        if not body.get(key):
+            raise HTTPException(422, f"`{key}` is required")
+    roster, res = channels.sync_availability(smes, body["week_start_utc"], body["week_end_utc"])
+    return {**res, "smes": roster, "synced_at": store_now()}
+
+
 @app.post("/api/sheets/pull")
 def sheets_pull(body: dict = Body(...)):
     """One dataset as CSV text, from whichever source is configured — a Google Sheet tab if there is

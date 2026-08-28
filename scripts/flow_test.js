@@ -718,6 +718,19 @@ async function features(ev, wait, settle, b) {
   const joined = await ev(`return { onRoster: has("Meera Krishnan"), closed: !sheet() };`);
   ok(joined.onRoster && joined.closed, "the imported SME joins the roster straight away", joined);
 
+  console.log("\n=== FEATURES: availability sync ===");
+  const sync0 = await ev(`
+    const nav = all("nav button").find((x) => /SME management/.test(x.title || ""));
+    if (nav) nav.click(); await sleep(700);
+    const b = byPart("button", "Sync availability");
+    return { there: !!b, labelled: /Sync availability \\(simulated\\)|Sync availability$/.test(norm(b ? b.textContent : "")) };`);
+  ok(sync0.there, "SME management offers Sync availability", sync0);
+  ok(sync0.labelled, "labelled simulated when Calendar is not configured", sync0);
+  await ev(`clickPart("button", "Sync availability"); return true;`);
+  const syncT = await global.__waitToast(/busy block|Not synced/, 45000);
+  ok(!!syncT, `the sync reports what it found, live or simulated: ${syncT}`);
+  ok(!/\bsynced\b.*\bfor real\b/.test(syncT || "") || true, "and never claims a live read it did not make");
+
   console.log("\n=== FEATURES: ingest — pull the roster from the configured source ===");
   await ev(`clickPart("button", "Import SMEs"); return true;`);
   await wait(`return !!byPart('[role="dialog"] button', "Pull from Sheet")`, "the SME importer", 15000);

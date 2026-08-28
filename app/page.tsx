@@ -16,7 +16,7 @@ import type {
 } from "@/lib/types";
 import {
   agentApply, agentRun, getIntegrations, loadSchedule, publishLeaf, pullSheet, pushSheet, runMatching,
-  saveSchedule, submitApprovals, type IntegrationsInfo,
+  saveSchedule, submitApprovals, syncAvailability, type IntegrationsInfo,
 } from "@/lib/api";
 import { isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { csvExporter } from "@/lib/export";
@@ -134,6 +134,11 @@ export default function Page() {
   const [histImp, setHistImp] = useState<ImportResult<ImportedHistory>>(emptyImport);
   // what the last pull reported, promoted into `provenance` only once the import is confirmed
   const [pulled, setPulled] = useState<DataProvenance>({});
+  // busy blocks read off each teacher's calendar, and how that sync went
+  const [busyBlocks, setBusyBlocks] = useState<Record<string, number>>({});
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncDetail, setSyncDetail] = useState<string | null>(null);
+  const [externalBusy, setExternalBusy] = useState<Record<string, { start_utc: string; end_utc: string }[]>>({});
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextRef = useRef<DraftRow[] | null>(null);
   const pubToken = useRef(0);
@@ -163,8 +168,12 @@ export default function Page() {
 
   /** The seed roster plus whatever ops added or edited this session — imports and profile edits. */
   const rosterFor = useCallback((w: WeekKey): SME[] => (
-    [...SMES[w], ...extraSmes].map((s) => (smeEdits[s.id] ? { ...s, ...smeEdits[s.id] } : s))
-  ), [extraSmes, smeEdits]);
+    [...SMES[w], ...extraSmes].map((s) => {
+      const merged = smeEdits[s.id] ? { ...s, ...smeEdits[s.id] } : s;
+      // a synced calendar block is a hard rule in Stage A, so it travels with the roster
+      return externalBusy[s.id]?.length ? { ...merged, external_busy: externalBusy[s.id] } : merged;
+    })
+  ), [extraSmes, smeEdits, externalBusy]);
 
   const smesFor = useCallback((w: WeekKey): SME[] => rosterFor(w), [rosterFor]);
 
@@ -740,6 +749,32 @@ export default function Page() {
     const res = await runNext({ availOff: nextOff, quiet: true });
     const mine = res ? res.draft.filter((r) => r.sme_id === META.me).length : 0;
     say(`${nextOff[key] ? "Block marked off" : "Block re-opened"} — next week re-drafted, you now have ${mine} class(es).`);
+  };
+
+  /** Read the week's calendars, then re-draft against what is already booked. */
+  const runAvailabilitySync = async () => {
+    const first = SESSIONS.next[0]?.start_utc;
+    if (!first) return;
+    const start = new Date(new Date(first).getTime() - istParts(first).day * 864e5);
+    const end = new Date(start.getTime() + 7 * 864e5);
+    setSyncBusy(true);
+    try {
+      const res = await syncAvailability(rosterFor("next"), start.toISOString(), end.toISOString());
+      setBusyBlocks(res.per_sme ?? {});
+      setSyncDetail(res.detail);
+      const map: Record<string, { start_utc: string; end_utc: string }[]> = {};
+      res.smes.forEach((s) => { if (s.external_busy?.length) map[s.id] = s.external_busy; });
+      setExternalBusy(map);
+      const roster = rosterFor("next").map((s) => (map[s.id] ? { ...s, external_busy: map[s.id] } : s));
+      await runNext({ smes: roster, quiet: true });
+      say(res.live
+        ? `${res.detail} Draft re-run against the calendars.`
+        : `${res.detail} Set Google credentials to read calendars for real.`);
+    } catch (e) {
+      say(String(e).slice(0, 160));
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   // ---------- copilot ----------
@@ -1517,6 +1552,11 @@ export default function Page() {
           onGhost={(sessionId) => setSheet({ kind: "ghost", sessionId, week, smeId: selSme })}
           onEditSme={openProfile}
           onReportOut={(id) => openAgent({ mode: "recovery", smeId: id, days: [] })}
+          onSyncAvailability={() => void runAvailabilitySync()}
+          syncBusy={syncBusy}
+          busyBlocks={busyBlocks}
+          syncDetail={syncDetail ?? integrations?.channels.freebusy?.detail}
+          syncLive={integrations?.channels.freebusy?.live}
           onImportSmes={() => { setSmeImp(emptyImport()); setSheet({ kind: "smeImport" }); }}
         />
       );

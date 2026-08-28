@@ -26,6 +26,13 @@ interface Props {
   onEditSme: (smeId: string) => void;
   onReportOut: (smeId: string) => void;
   onImportSmes: () => void;
+  /** read each teacher's calendar for the week and re-draft against what is already booked */
+  onSyncAvailability: () => void;
+  syncBusy?: boolean;
+  /** busy blocks found per SME on the last sync, and whether that sync was live */
+  busyBlocks?: Record<string, number>;
+  syncDetail?: string;
+  syncLive?: boolean;
 }
 
 const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
@@ -37,6 +44,7 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 export default function SmeManagement({
   smes, rows, courses, meta, weeks, week, weekDates, approved, selected, leave, query, filter, vh,
   onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onReportOut, onImportSmes,
+  onSyncAvailability, syncBusy, busyBlocks, syncDetail, syncLive,
 }: Props) {
   const shown = smes.filter((s) => smeMatches(s, rows, query, filter, leave));
   const sel = smes.find((s) => s.id === selected) ?? shown[0] ?? smes[0];
@@ -94,7 +102,18 @@ export default function SmeManagement({
             ))}
           </div>
           <button
-            className="ml-auto inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[11px] bg-white p-[7px_13px_7px_8px] text-[12px] font-semibold"
+            className="ml-auto inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[11px] bg-white p-[7px_13px] text-[12px] font-semibold"
+            style={{ border: "1px solid #dfe7f2", color: "var(--ink)", boxShadow: "0 1px 2px rgba(54,67,87,0.05)" }}
+            onClick={onSyncAvailability}
+            disabled={syncBusy}
+            title={syncLive
+              ? `Reads each teacher's Google Calendar for this week — ${syncDetail ?? ""}`
+              : `Simulated — ${syncDetail ?? "Google Calendar not configured"}`}
+          >
+            <span>{syncBusy ? "Syncing…" : `Sync availability${syncLive ? "" : " (simulated)"}`}</span>
+          </button>
+          <button
+            className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[11px] bg-white p-[7px_13px_7px_8px] text-[12px] font-semibold"
             style={{ border: "1px solid #dfe7f2", color: "var(--ink)", boxShadow: "0 1px 2px rgba(54,67,87,0.05)" }}
             onClick={onImportSmes}
             title="Download the SME template, fill it in Excel, upload it back"
@@ -196,6 +215,15 @@ export default function SmeManagement({
                       >
                         {leave[s.id] ?? "Available"}
                       </span>
+                      {!!busyBlocks?.[s.id] && (
+                        <span
+                          className="mt-[4px] block rounded-[8px] px-[7px] py-[3px] text-[10px] font-semibold"
+                          style={{ background: "var(--sand-tint)", color: "var(--sand-ink)" }}
+                          title="Blocks already on their calendar this week — Stage A will not book over them"
+                        >
+                          {busyBlocks[s.id]} calendar block{busyBlocks[s.id] === 1 ? "" : "s"}
+                        </span>
+                      )}
                     </td>
                     <td style={{ ...td, paddingRight: 20, textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
                       <span className="inline-flex gap-[6px]">

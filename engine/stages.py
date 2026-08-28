@@ -30,6 +30,7 @@ RULE_LABELS = {
     "sub_specialty": "sub-specialty expertise",
     "training_level": "training level requirement",
     "availability": "availability window",
+    "calendar_busy": "calendar conflict",
 }
 
 
@@ -78,6 +79,24 @@ def is_available(sme: dict, start: datetime, end: datetime) -> bool:
         if w["weekday"] == wd and _minutes(w["start_utc"]) <= s_min and e_min <= _minutes(w["end_utc"]):
             return True
     return False
+
+
+def busy_overlap(block: dict, start: datetime, end: datetime) -> bool:
+    """Does an external calendar block collide with this session's span?
+
+    `weekly_availability` stays the SME's declared working pattern; a synced busy block is a separate,
+    additive hard rule. Rewriting the pattern from freebusy would conflate "when I work" with "what
+    is already on my calendar this week", and the two answer different questions.
+    """
+    try:
+        b0, b1 = parse_utc(block["start_utc"]), parse_utc(block["end_utc"])
+    except (KeyError, TypeError, ValueError):
+        return False                       # a malformed block must never silently eliminate everyone
+    return b0 < end and start < b1
+
+
+def busy_at(sme: dict, start: datetime, end: datetime) -> dict | None:
+    return next((b for b in (sme.get("external_busy") or []) if busy_overlap(b, start, end)), None)
 
 
 def overlaps(a: dict, b: dict) -> bool:
@@ -152,7 +171,8 @@ def topic_rating(weeks: list[dict], topic: str) -> float:
 def stage_a_hard_filter(session: dict, smes: list[dict], draft: list[dict],
                         exclude_session_id: str | None = None) -> tuple[list[dict], list[dict]]:
     """Return (survivors, eliminated). `draft` = rows already holding an sme_id.
-    eliminated entries: {sme_id, name, rule} where rule in subject|sub_specialty|training_level|availability|overlap:<session_id>."""
+    eliminated entries: {sme_id, name, rule} where rule in
+    subject|sub_specialty|training_level|availability|calendar_busy|overlap:<session_id>."""
     start, end = session_span(session)
     survivors, eliminated = [], []
     for sme in smes:
@@ -165,6 +185,8 @@ def stage_a_hard_filter(session: dict, smes: list[dict], draft: list[dict],
             rule = "training_level"
         elif not is_available(sme, start, end):
             rule = "availability"
+        elif busy_at(sme, start, end):
+            rule = "calendar_busy"
         else:
             for row in draft:
                 if row.get("sme_id") == sme["id"] and row["session_id"] != session["id"] \
@@ -188,7 +210,11 @@ def unfilled_reason(session: dict, eliminated: list[dict]) -> str:
     ss = [e for e in same_subject if e["rule"] == "sub_specialty"]
     tl = [e for e in same_subject if e["rule"] == "training_level"]
     av = [e for e in same_subject if e["rule"] == "availability"]
+    cb = [e for e in same_subject if e["rule"] == "calendar_busy"]
     ov = [e for e in same_subject if e["rule"].startswith("overlap:")]
+    if cb:
+        parts.append(f"{', '.join(e['name'] for e in cb)} "
+                     f"{'has' if len(cb) == 1 else 'have'} a calendar conflict at {fmt_ist(start)}")
     if av:
         parts.append(f"{len(av)} {session['subject']} SME(s) unavailable at {fmt_ist(start)} "
                      f"({', '.join(e['name'] for e in av)})")
@@ -265,6 +291,8 @@ def stage_d_validate(rows: list[dict], smes: list[dict], hist: dict) -> list[dic
             start, end = session_span(row)
             if not is_available(sme, start, end):
                 rule = "availability"
+            elif busy_at(sme, start, end):
+                rule = "calendar_busy"
             else:
                 for other in accepted.get(sme["id"], []):
                     if overlaps(other, row):

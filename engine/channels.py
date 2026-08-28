@@ -154,6 +154,8 @@ def _disabled() -> str | None:
 
 CAL_SCOPE = "https://www.googleapis.com/auth/calendar"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+CAL_READ_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+FREEBUSY_MAX = 50          # Google's per-request calendar cap
 
 
 def publishes_as_user() -> bool:
@@ -205,6 +207,8 @@ def status() -> dict:
     s, sw = sms_ready()
     return {
         "cal": {"live": g, "detail": gw, "name": "Google Calendar"},
+        "freebusy": {"live": g, "detail": gw if g else f"{gw} — availability sync reports simulated",
+                     "name": "Calendar availability"},
         "email": {"live": e, "detail": ew, "name": "e-mail"},
         "sms": {"live": s, "detail": sw, "name": "SMS"},
     }
@@ -240,6 +244,50 @@ def _google_token(scopes: list[str] | None = None) -> str:
             creds = creds.with_subject(subject)
     creds.refresh(Request())
     return creds.token
+
+
+def read_freebusy(emails: list[str], start_utc: str, end_utc: str, api=None) -> dict[str, list[dict]]:
+    """{email: [{start_utc, end_utc}]} of blocks already on each teacher's calendar for the week.
+
+    One request for up to 50 calendars. Returns {} when credentials are absent — the caller labels
+    that `simulated` rather than pretending everyone is free, which would be the same answer as
+    "nobody has anything booked" and is the one lie this codebase must not tell.
+    """
+    ready, _ = google_ready()
+    # Not `deliverable()`: that guard exists so a live *send* never reaches a reserved domain. Reading
+    # a calendar cannot spam anyone, and the seed roster is entirely @ik.example — filtering it here
+    # would make the sync silently return nothing for the data the demo actually runs on.
+    targets = list(dict.fromkeys(e.strip() for e in emails if e and "@" in e))[:FREEBUSY_MAX]
+    if not (ready and targets):
+        return {}
+    if api is None:
+        token = _google_token([CAL_SCOPE, CAL_READ_SCOPE])
+
+        def api(body: dict) -> dict:                                     # noqa: E306
+            return _post("https://www.googleapis.com/calendar/v3/freeBusy", body,
+                         {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        got = api({"timeMin": start_utc, "timeMax": end_utc, "items": [{"id": e} for e in targets]})
+    except Exception:
+        return {}                     # a failed read must degrade to "nothing synced", never to a crash
+    out: dict[str, list[dict]] = {}
+    for email, cal in (got.get("calendars") or {}).items():
+        out[email] = [{"start_utc": b["start"], "end_utc": b["end"]}
+                      for b in (cal.get("busy") or []) if b.get("start") and b.get("end")]
+    return out
+
+
+def sync_availability(smes: list[dict], start_utc: str, end_utc: str, api=None) -> tuple[list[dict], Result]:
+    """The roster with `external_busy` filled in, plus a Result the UI labels live or simulated."""
+    ready, why = google_ready()
+    busy = read_freebusy([s.get("email") or "" for s in smes], start_utc, end_utc, api=api)
+    out = [{**s, "external_busy": busy.get(s.get("email") or "", [])} for s in smes]
+    blocks = sum(len(v) for v in busy.values())
+    if not ready:
+        return out, Result("simulated", f"Not synced — {why}.", 0, per_sme={})
+    covered = sum(1 for s in out if s["external_busy"])
+    return out, Result("sent", f"{blocks} busy block(s) across {covered} teacher(s).", blocks, True,
+                       per_sme={s["id"]: len(s["external_busy"]) for s in out})
 
 
 def send_calendar(rows: list[dict], audience: str, store=None, api=None, calendar_id: str | None = None) -> Result:

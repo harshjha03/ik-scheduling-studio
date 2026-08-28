@@ -92,6 +92,8 @@ export interface SME {
   preferred: number;
   leave: string | null;
   weekly_availability: AvailabilityWindow[];
+  /** blocks already on their calendar this week, from an availability sync — a Stage A hard rule */
+  external_busy?: { start_utc: string; end_utc: string }[];
   preference_notes: string;
   history: HistoryWeek[];
 }

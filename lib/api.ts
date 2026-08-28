@@ -89,6 +89,19 @@ export async function getIntegrations(): Promise<IntegrationsInfo> {
 
 export interface SheetResult extends PublishResult { csv?: string; tab?: string }
 
+export interface AvailabilityResult extends PublishResult {
+  smes: SME[];
+  per_sme: Record<string, number>;
+  synced_at: string;
+}
+
+/** Read every teacher's calendar for the week; Stage A then refuses to book over a busy block. */
+export function syncAvailability(smes: SME[], weekStartUtc: string, weekEndUtc: string) {
+  return post<AvailabilityResult>("/api/availability/sync", {
+    smes, week_start_utc: weekStartUtc, week_end_utc: weekEndUtc,
+  });
+}
+
 export interface PullResult extends SheetResult { dataset?: string; source?: string; synced_at?: string }
 
 /** One dataset as CSV text, from whichever source is configured. The caller runs it through the

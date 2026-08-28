@@ -644,3 +644,87 @@ def test_unknown_subject_returns_unfilled_not_crash():
     out = _api().run({"sessions": [sess], "smes": smes, "history": [], "overrides": [], "llm": False})
     assert out["stats"]["unfilled"] == 1
     assert out["draft"][0]["flags"][0]["code"] == "UNFILLED"
+
+
+# ---------------- calendar availability (external busy blocks) ----------------
+
+def busy(start="2026-08-31T04:00:00Z", end="2026-08-31T05:00:00Z"):
+    return {"start_utc": start, "end_utc": end}
+
+
+def test_stage_a_eliminates_a_teacher_whose_calendar_is_busy():
+    """A synced busy block is an additive hard rule, separate from the declared working pattern."""
+    free, booked = sme("A"), {**sme("B"), "external_busy": [busy()]}
+    surv, elim = S.stage_a_hard_filter(session("S1"), [free, booked], [])
+    assert [s["id"] for s in surv] == ["A"]
+    assert {e["sme_id"]: e["rule"] for e in elim} == {"B": "calendar_busy"}
+    assert S.rule_label("calendar_busy") == "calendar conflict"
+
+
+def test_a_block_outside_the_session_does_not_eliminate():
+    early = {**sme("B"), "external_busy": [busy("2026-08-31T02:00:00Z", "2026-08-31T03:00:00Z")]}
+    surv, _ = S.stage_a_hard_filter(session("S1"), [early], [])          # session is 04:30–05:30Z
+    assert [s["id"] for s in surv] == ["B"]
+
+
+def test_a_malformed_block_is_ignored_rather_than_eliminating_everyone():
+    junk = {**sme("B"), "external_busy": [{"start_utc": "not-a-time", "end_utc": None}, {}]}
+    surv, _ = S.stage_a_hard_filter(session("S1"), [junk], [])
+    assert [s["id"] for s in surv] == ["B"]
+
+
+def test_unfilled_reason_names_the_calendar_conflict():
+    booked = {**sme("B"), "external_busy": [busy()]}
+    sess = session("S1")
+    _, elim = S.stage_a_hard_filter(sess, [booked], [])
+    reason = S.unfilled_reason(sess, elim)
+    assert "Name B has a calendar conflict at Mon 10:00 IST" in reason
+
+
+def test_stage_d_rejects_an_assignment_a_later_sync_made_conflicting():
+    """An LLM pick or an ops override must not survive a calendar conflict silently."""
+    smes = [sme("A")]
+    rows = run_pipeline([session("S1")], smes, [], [], llm_enabled=False)["draft"]
+    assert rows[0]["sme_id"] == "A"                                   # staffed before the sync
+
+    synced = [{**smes[0], "external_busy": [busy()]}]                # then the calendar says otherwise
+    rows[0]["flags"] = []
+    S.stage_d_validate(rows, synced, S.build_hist([], synced))
+    assert rows[0]["sme_id"] is None and rows[0]["rejected_sme_id"] == "A"
+    unfilled = next(f for f in rows[0]["flags"] if f["code"] == "UNFILLED")
+    assert "calendar conflict" in unfilled["reason"]
+
+
+def test_sync_availability_degrades_to_simulated_without_credentials(monkeypatch):
+    import engine.channels as C
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_JSON", raising=False)
+    roster, res = C.sync_availability([{**sme("A"), "email": "a@ik.example"}], "2026-08-31T00:00:00Z",
+                                      "2026-09-06T00:00:00Z")
+    assert res["status"] == "simulated" and res["live"] is False and res["count"] == 0
+    assert roster[0]["external_busy"] == []          # nothing synced, and it says so rather than "free"
+
+
+def test_sync_availability_fills_external_busy_from_one_freebusy_call(monkeypatch):
+    import engine.channels as C
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", '{"type":"service_account"}')
+    monkeypatch.setenv("GOOGLE_CALENDAR_ID", "cohort@group.calendar.google.com")
+    monkeypatch.delenv("PUBLISH_DISABLED", raising=False)
+    seen = {}
+
+    def api(bodyDict):
+        seen.update(bodyDict)
+        return {"calendars": {
+            "a@ik.example": {"busy": [{"start": "2026-08-31T04:00:00Z", "end": "2026-08-31T05:00:00Z"}]},
+            "b@ik.example": {"busy": []},
+        }}
+    smes = [{**sme("A"), "email": "a@ik.example"}, {**sme("B"), "email": "b@ik.example"},
+            {**sme("C"), "email": None}]
+    roster, res = C.sync_availability(smes, "2026-08-31T00:00:00Z", "2026-09-06T00:00:00Z", api=api)
+    assert res["status"] == "sent" and res["live"] is True and res["count"] == 1
+    assert res["per_sme"] == {"A": 1, "B": 0, "C": 0}
+    assert [{"id": "a@ik.example"}, {"id": "b@ik.example"}] == seen["items"]   # one call, no address twice
+    assert roster[0]["external_busy"] == [busy()]
+    # and the synced roster changes what Stage A allows
+    surv, _ = S.stage_a_hard_filter(session("S1"), roster, [])
+    assert "A" not in [s["id"] for s in surv] and "B" in [s["id"] for s in surv]
