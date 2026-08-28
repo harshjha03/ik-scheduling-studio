@@ -122,6 +122,17 @@ Python deps come from `requirements.txt`. Verify: `curl -X POST https://<app>/ap
 | # | Connection | Env vars | Without it |
 |---|---|---|---|
 | 1 | **Postgres** (Neon / Supabase / RDS) | `DATABASE_URL` | *Required on Vercel.* Saved weeks and calendar event ids vanish on every cold start; re-publishing duplicates events. |
+
+On Supabase specifically, three things are worth getting right the first time — `vercel.json` pins the
+function to `sin1`, so put the project in **ap-southeast-1**; a distant region adds latency to every
+query and the publish path does several per run. Use the **Supavisor pooler** host, not
+`db.<ref>.supabase.co:5432` — the direct host is IPv6-only and Vercel's egress cannot reach it, which
+presents as timeouts that look like the database is down. **Session mode (5432 on the pooler host)**
+suits this code, because `store._connect()` deliberately keeps one long-lived connection per process;
+`prepare_threshold=None` is passed either way, so transaction mode (6543) also works instead of
+failing with `prepared statement "_pg3_0" does not exist` once the app is warm. Confirm with
+`GET /api/integrations` → `storage.durable: true`.
+
 | 2 | **Google Cloud project** with the Calendar API enabled, plus one identity to publish as — a service account (share the calendar with it, "Make changes to events") or an OAuth Desktop client consented by a person | `GOOGLE_CALENDAR_ID` + either `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_OAUTH_JSON` (raw or base64) | Calendar publish reports `simulated`; nothing is written. |
 | 2b | Whichever identity you skipped — see the table under *Publishing* | `GOOGLE_OAUTH_JSON`, or `GOOGLE_IMPERSONATE` for Workspace delegation | Events are written but SMEs are not invited; they have to subscribe to the calendar. |
 | 2b-cal | **`calendar.readonly` scope** on whichever identity you publish as | (no new var — same credentials) | *Sync availability* reports `simulated` with zero blocks; Stage A uses declared working hours only, not what is already on the calendar. |

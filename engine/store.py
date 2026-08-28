@@ -68,10 +68,15 @@ class Store:
     def _connect(self):
         if self.driver == "postgres":
             import psycopg  # imported lazily so local dev needs no driver at all
-            # A fresh TCP+TLS handshake per query cost ~2s each from Vercel to Neon; a publish does
-            # two per class row. Keep one connection and reconnect only when Neon has dropped it.
+            # A fresh TCP+TLS handshake per query cost ~2s each from Vercel to a managed Postgres; a
+            # publish does two per class row. Keep one connection and reconnect only when the provider
+            # has dropped it (Neon suspends idle compute; Supabase's Supavisor drops idle clients).
             if self._pg is None or self._pg.closed:
-                self._pg = psycopg.connect(self.url)
+                # prepare_threshold=None disables psycopg3's automatic server-side prepared statements.
+                # Harmless in session mode, and required behind a transaction-mode pooler (Supavisor on
+                # 6543), where the next statement may land on a different backend and the prepared name
+                # is gone: "prepared statement _pg3_0 does not exist", only once the app is warm.
+                self._pg = psycopg.connect(self.url, prepare_threshold=None)
             return self._pg
         conn = sqlite3.connect(self.path)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -97,7 +102,8 @@ class Store:
                     return cur.fetchall() if fetch == "all" else cur.fetchone() if fetch == "one" else None
         except Exception as exc:
             msg = str(exc)
-            # Neon suspends idle compute and drops the socket; the next query fails once. Reconnect and retry.
+            # Neon suspends idle compute and Supavisor drops idle clients; either way the socket goes
+            # and the next query fails once. Reconnect and retry.
             if retry and self.driver == "postgres" and (self._pg is None or self._pg.closed or
                                                        "connection" in msg.lower() or "SSL" in msg):
                 self._pg = None
