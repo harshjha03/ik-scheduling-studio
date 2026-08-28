@@ -16,7 +16,7 @@ import threading
 from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 
-_lock = threading.Lock()          # ponytail: one process, one lock; per-connection pooling if it ever matters
+_lock = threading.Lock()          # one process, one lock; per-connection pooling if it ever matters
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS schedule (

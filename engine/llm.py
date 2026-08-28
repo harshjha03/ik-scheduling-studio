@@ -223,7 +223,7 @@ def fallback_llm_call(payload: dict) -> dict:
 
 
 def openai_compatible_call(payload: dict, cfg: dict | None = None) -> dict:
-    """POST {base_url}/chat/completions with JSON-object mode. ponytail: stdlib urllib, no SDK.
+    """POST {base_url}/chat/completions with JSON-object mode. Stdlib urllib, no SDK.
     Providers without schema enforcement get the schema in the prompt; _validate() catches anything off."""
     system = SYSTEM + " Output a single JSON object matching this JSON schema exactly: " + json.dumps(SCHEMA)
     return chat_json(system, [{"role": "user", "content": json.dumps(payload)}], cfg)

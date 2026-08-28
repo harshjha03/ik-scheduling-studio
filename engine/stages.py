@@ -399,7 +399,7 @@ def fairness_band_breach(sme_id: str, subject: str, smes: list[dict], hist: dict
 
 def stage_e_adjustments(overrides: list[dict]) -> dict[tuple[str, str], float]:
     """Override feedback: -0.2 for the overridden (SME, batch) pairing, +0.1 for the pairing ops chose.
-    ponytail: pairing key is batch_id (every session has one); topic-level pairing not needed for the demo."""
+    The pairing key is batch_id (every session has one); topic-level pairing is not needed here."""
     adjust: dict[tuple[str, str], float] = {}
     for o in overrides or []:
         if o.get("from_sme_id"):

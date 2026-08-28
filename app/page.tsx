@@ -97,7 +97,7 @@ export default function Page() {
   const [imp, setImp] = useState<ImportResult<ImportedClass>>(emptyImport);
   const [smeImp, setSmeImp] = useState<ImportResult<ImportedSme>>(emptyImport);
   const [prof, setProf] = useState<Profile | null>(null);
-  // ponytail: students are a persona, not a roster — one e-mail in state; move onto a learner record when one exists
+  // Students are a persona here, not a roster — one e-mail in state; move onto a learner record when one exists
   const [studentEmail, setStudentEmail] = useState("aarav.shah@example.com");
   const [emailDraft, setEmailDraft] = useState("");
   const [selSme, setSelSme] = useState("T01");

@@ -333,7 +333,7 @@ def _enforce(ctx: dict, plan: list[dict] | None, prov: dict, affected: list[dict
     if bad_shape:
         notes.append(f"{len(bad_shape)} suggestion(s) were not staffing moves the copilot can apply — "
                      f"they are listed above as options for you to action.")
-    # ponytail: swap depth as a size cap — each affected row may carry at most one freeing move on top of
+    # Swap depth doubles as a size cap — each affected row may carry at most one freeing move on top of
     # its own, plus a bounded number of reschedules/upgrades so a plan stays reviewable in one glance.
     staffing = [m for m in moves if T._kind_of(m) == "move"]
     other = [m for m in moves if T._kind_of(m) != "move"]

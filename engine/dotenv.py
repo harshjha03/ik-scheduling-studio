@@ -1,5 +1,5 @@
 """Minimal .env loader (KEY=VALUE lines, # comments, optional surrounding quotes). No-op if the file is
-missing — on Vercel the variables come from project settings. ponytail: avoids python-dotenv and, more
+missing — on Vercel the variables come from project settings. Avoids python-dotenv and, more
 importantly, avoids sourcing .env through `sh`, which strips the quotes out of JSON values."""
 from __future__ import annotations
 

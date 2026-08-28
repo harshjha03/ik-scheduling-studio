@@ -26,7 +26,7 @@ from engine.run import apply_approvals, run_pipeline  # noqa: E402
 from engine.store import store  # noqa: E402
 
 app = FastAPI(title="SME Scheduler API")
-_last_run: dict | None = None  # ponytail: warm-instance cache only; frontend is the source of truth
+_last_run: dict | None = None  # warm-instance cache only; the frontend is the source of truth
 
 
 @app.post("/api/run")

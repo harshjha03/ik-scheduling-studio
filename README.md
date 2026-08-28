@@ -414,10 +414,14 @@ one it shows the labelled fallback — a fallback is never dressed up as a copil
 - Override pairing key is `(SME, batch_id)` — every session has a batch, so the "or-topic" variant is not needed.
 - Stage C rewrites reason strings for the flags that exist before Stage D (UNFILLED). FAIRNESS_VIOLATION /
   HARD_CONFLICT reasons use the templates from the flag table (already plain language) to keep one LLM call per run.
-- Approvals, overrides, leave, drop-outs and created batches live in the page for the session — there is no
-  database (see the statelessness note above). Refreshing starts a fresh review.
+- The drafted week, the publish log and the calendar event ids are persisted (`engine/store.py`,
+  `GET|POST /api/schedule`), so a refresh restores the coordinator's work rather than starting over.
+  Leave requests, dismissed work items and created batches are still session state in the page: they
+  are review scratch, and a reviewer who reloads should get a clean demo.
 - The live ("This week") teacher change is a request: it appears in the SME persona as a change request and is
   applied only when accepted — the design's live-week rule.
-- Google Sheets: `lib/export.ts` declares `ScheduleExporter`; only the CSV implementation exists.
-  `post_session_rating` is present in the schema and stays `null`.
+- Google Sheets reads a tab as CSV text and lets `lib/import.ts` validate it, rather than
+  reimplementing the column contract in Python. One validator, one place errors are worded; the
+  trade is that the Sheets reader cannot pre-check anything server-side.
+- `post_session_rating` is present in the schema and stays `null`.
 - Out of scope per spec: live Calendar/Sheets sync, rating capture UI, webhook drop-outs, auth, persistence.
