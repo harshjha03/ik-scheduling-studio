@@ -352,6 +352,30 @@ One bad row never sinks the batch: failures are counted per row and reported in 
 > durable, so this isn't something you can forget. `pytest` is unaffected — it never touches the
 > network or a real database.
 
+## Publish performance
+
+A 41-row SME calendar publish was ~16s: one OAuth refresh per call, 41 serial HTTP writes each paying
+a fresh TCP+TLS handshake (`urllib.request` pools nothing), and 41 separate `remember_event` round
+trips. Four changes, each of which exposed the next:
+
+| Change | Why it mattered |
+|---|---|
+| Token cached per scope set | It refreshed on every `send_calendar`, and the student fan-out calls that once per cohort calendar |
+| Pooled `requests.Session` (4/16) | `google-auth[requests]` already ships requests, so connection reuse cost no new dependency |
+| `CAL_WORKERS=8` thread pool over a pure `_write_one` | The per-row body does no store writes: the store takes a process-wide lock, so workers writing to it would serialise on that lock |
+| One batched `remember_events` | 41 cross-region round trips became one, which matters far more on a managed Postgres than on local SQLite |
+| `body_hash` skip | The common case once a week is live is re-publishing after fixing two classes |
+
+Measured against a latency-stubbed API at 120 ms per call, 41 rows: a **4.9s serial floor → 0.8s**
+(6.5×), and an unchanged re-publish sends **nothing at all**. Each publish reports its own duration in
+`Result.detail`, so it lands in `/api/publish/log` without extra plumbing. The publish sheet also
+fires its six channel/audience leaves concurrently while still reporting each one as it lands, so wall
+clock is the slowest leaf rather than the sum.
+
+Out of scope: Google's `multipart/mixed` batch endpoint. It is the theoretically ideal answer, but it
+is ~80 lines of fiddly assembly with awkward per-sub-request error handling, and Google has deprecated
+global batch endpoints before. The five changes above get most of the win at a fraction of the risk.
+
 ## Pipeline
 
 | Stage | Where | What |

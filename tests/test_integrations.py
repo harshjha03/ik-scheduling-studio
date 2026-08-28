@@ -1,7 +1,12 @@
 """Storage and outbound channels. No credentials and no network: the HTTP call is injected."""
+import json
 import os
+import re
 import sys
+import threading
+import time
 import urllib.error
+from datetime import datetime
 
 import pytest
 
@@ -145,10 +150,19 @@ def test_calendar_creates_then_updates_the_same_event(db, live):
     assert first["status"] == "sent" and first["live"] is True and first["count"] == 1
     assert calls[0][0] == "POST" and calls[0][1] == "?sendUpdates=none"
     assert db.event_for(ROW["session_id"], CAL) == "evt-1"
-    # publishing again must update the event we already own, never create a second one
+
+    # publishing the same week again sends nothing at all: the stored body hash still matches
     second = C.send_calendar([ROW], "sme", store=db, api=api)
-    assert second["status"] == "sent"
+    assert second["status"] == "sent" and second["count"] == 1
+    assert len(calls) == 1, "an unchanged row must not be re-sent"
+    assert "unchanged and skipped" in second["detail"]
+
+    # change the class and it must UPDATE the event we already own, never create a second one
+    moved = {**ROW, "sme_name": "Rahul Desai"}
+    third = C.send_calendar([moved], "sme", store=db, api=api)
+    assert third["status"] == "sent"
     assert calls[1][0] == "PUT" and calls[1][1] == "/evt-1?sendUpdates=none"
+    assert db.event_for(ROW["session_id"], CAL) == "evt-1"
 
 
 def test_each_calendar_gets_its_own_event(db, live):
@@ -582,3 +596,116 @@ def test_only_datasets_the_page_boots_from_are_writable():
                                    "history", "batches"}
     for structural in ("courses", "weeks", "meta"):
         assert structural not in index.DATASETS
+
+
+# ---------------- publish performance ----------------
+
+def test_the_row_loop_runs_in_parallel(db, live):
+    """41 serial writes were most of a 16s publish. With a latency-stubbed api the pool must finish in
+    roughly one batch of round trips, not 41 of them."""
+    rows = [{**ROW, "session_id": f"S{i:02d}"} for i in range(24)]
+    order = []
+
+    def slow_api(method, path, body):
+        time.sleep(0.05)                       # stand in for a real TCP+TLS round trip
+        order.append(threading.current_thread().name)
+        return {"id": f"evt-{len(order)}"}
+
+    t0 = time.perf_counter()
+    res = C.send_calendar(rows, "sme", store=db, api=slow_api)
+    took = time.perf_counter() - t0
+    assert res["count"] == 24 and res["status"] == "sent"
+    serial = 24 * 0.05
+    assert took < serial / 3, f"{took:.2f}s for 24 rows against a {serial:.2f}s serial floor"
+    assert len(set(order)) > 1, "the writes must actually be spread across workers"
+    # ...and every row still landed exactly once, in one batched DB write
+    assert len(db.owned_on(CAL)) == 24
+
+
+def test_one_bad_row_still_does_not_sink_the_parallel_batch(db, live):
+    """Per-row failure isolation has to survive the thread pool, and the count in `detail` with it."""
+    rows = [{**ROW, "session_id": f"S{i}"} for i in range(4)]
+    lock = threading.Lock()
+    seen = []
+
+    def flaky(method, path, body):
+        with lock:
+            seen.append(body["description"])
+            n = len(seen)
+        if n == 2:
+            raise RuntimeError("boom")
+        return {"id": f"e{n}"}
+
+    res = C.send_calendar(rows, "sme", store=db, api=flaky)
+    assert res["status"] == "sent" and res["count"] == 3
+    assert "1 failed" in res["detail"] and len(db.owned_on(CAL)) == 3
+
+
+def test_the_publish_reports_how_long_it_took(db, live):
+    res = C.send_calendar([ROW], "sme", store=db, api=lambda m, p, b: {"id": "e1"})
+    assert re.search(r"in \d+\.\d+s", res["detail"]), res["detail"]
+
+
+def test_the_access_token_is_cached_per_scope(monkeypatch, live):
+    """It refreshed on every send_calendar call, and the student fan-out calls that once per cohort
+    calendar — several OAuth round trips before a single event was written."""
+    refreshes = []
+
+    class FakeCreds:
+        token = "ya29.fake"
+        expiry = datetime(2099, 1, 1)
+
+        def refresh(self, _request):
+            refreshes.append(1)
+
+    class FakeSA:                                   # stands in for service_account.Credentials
+        @staticmethod
+        def from_service_account_info(info, scopes=None):
+            return FakeCreds()
+
+    C.forget_tokens()
+    monkeypatch.setitem(sys.modules, "google.auth.transport.requests",
+                        type(sys)("google.auth.transport.requests"))
+    sys.modules["google.auth.transport.requests"].Request = lambda: object()
+    sa_module = type(sys)("google.oauth2.service_account")
+    sa_module.Credentials = FakeSA
+    oauth2 = type(sys)("google.oauth2")
+    oauth2.service_account = sa_module
+    monkeypatch.setitem(sys.modules, "google.oauth2", oauth2)
+    monkeypatch.setitem(sys.modules, "google.oauth2.service_account", sa_module)
+    try:
+        assert C._google_token() == "ya29.fake"
+        assert C._google_token() == "ya29.fake"
+        assert C._google_token([C.CAL_SCOPE]) == "ya29.fake"
+        assert len(refreshes) == 1, "the same scope set must not refresh twice"
+        C._google_token([C.SHEETS_SCOPE])
+        assert len(refreshes) == 2, "a different scope set needs its own token"
+    finally:
+        C.forget_tokens()
+
+
+def test_the_http_session_is_pooled_and_reused():
+    """urllib opened a fresh TCP+TLS connection per event; the pooled session is what removes that."""
+    a, b = C._http(), C._http()
+    assert a is b
+    adapter = a.get_adapter("https://www.googleapis.com/")
+    assert adapter._pool_maxsize == 16 and adapter._pool_connections == 4
+
+
+def test_a_failing_status_still_carries_its_code(monkeypatch):
+    """send_calendar's re-create path keys off 404/410, and did so when this was urllib."""
+    class FakeResp:
+        status_code = 404
+        text = "gone"
+
+    class FakeSession:
+        def request(self, *a, **k):
+            return FakeResp()
+
+        def get(self, *a, **k):
+            return FakeResp()
+    monkeypatch.setattr(C, "_http", lambda: FakeSession())
+    for call in (lambda: C._post("https://x/y", {}, {}), lambda: C._get("https://x/y", {})):
+        with pytest.raises(Exception) as e:
+            call()
+        assert getattr(e.value, "code", None) == 404

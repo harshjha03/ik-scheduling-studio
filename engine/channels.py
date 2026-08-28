@@ -12,16 +12,21 @@ Contact data lives on the records themselves:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
 TIMEOUT = float(os.environ.get("CHANNEL_TIMEOUT", "20"))
+CAL_WORKERS = int(os.environ.get("CAL_WORKERS", "8"))
 
 
 class Result(dict):
@@ -65,19 +70,54 @@ def _redirect(kind: str, targets: list[str]) -> tuple[list[str], str]:
     return [to], f" (redirected to {to}; {len(targets)} real recipient(s) suppressed)"
 
 
+class HttpError(Exception):
+    """Carries `.code`, because send_calendar's re-create path keys off 404/410 and did so when this
+    was urllib. Same attribute, same behaviour, pooled transport."""
+
+    def __init__(self, code: int, detail: str):
+        super().__init__(f"HTTP {code}: {detail[:300]}")
+        self.code = code
+
+
+_http_lock = threading.Lock()
+_http_session = None
+
+
+def _http():
+    """A module-level pooled session. urllib opens a new TCP+TLS connection per call, which is most
+    of the 16s a 41-event publish used to take; `google-auth[requests]` already pulls requests in, so
+    the pool costs no new dependency."""
+    global _http_session
+    with _http_lock:
+        if _http_session is None:
+            import requests                                    # noqa: PLC0415
+            from requests.adapters import HTTPAdapter           # noqa: PLC0415
+            sess = requests.Session()
+            adapter = HTTPAdapter(pool_connections=4, pool_maxsize=16)
+            sess.mount("https://", adapter)
+            sess.mount("http://", adapter)
+            _http_session = sess
+    return _http_session
+
+
+def _parse_body(raw: str) -> dict:
+    return json.loads(raw) if raw.strip().startswith(("{", "[")) else {"raw": raw}
+
+
 def _post(url: str, body: dict | str, headers: dict, method: str = "POST") -> dict:
     data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers={"User-Agent": "ik-scheduler/1.0", **headers}, method=method)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        raw = resp.read().decode() or "{}"
-    return json.loads(raw) if raw.strip().startswith(("{", "[")) else {"raw": raw}
+    resp = _http().request(method, url, data=data,
+                           headers={"User-Agent": "ik-scheduler/1.0", **headers}, timeout=TIMEOUT)
+    if resp.status_code >= 400:
+        raise HttpError(resp.status_code, resp.text)
+    return _parse_body(resp.text or "{}")
 
 
 def _get(url: str, headers: dict) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "ik-scheduler/1.0", **headers}, method="GET")
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        raw = resp.read().decode() or "{}"
-    return json.loads(raw) if raw.strip().startswith(("{", "[")) else {"raw": raw}
+    resp = _http().get(url, headers={"User-Agent": "ik-scheduler/1.0", **headers}, timeout=TIMEOUT)
+    if resp.status_code >= 400:
+        raise HttpError(resp.status_code, resp.text)
+    return _parse_body(resp.text or "{}")
 
 
 # ---------------------------------------------------------------- payload builders (pure)
@@ -223,13 +263,33 @@ def _blob(name: str) -> dict:
     return json.loads(raw)
 
 
+_tokens: dict[tuple[str, ...], tuple[str, float]] = {}
+_token_lock = threading.Lock()
+
+
+def forget_tokens() -> None:
+    """Drop the cache. For tests, and for a credential change without a restart."""
+    with _token_lock:
+        _tokens.clear()
+
+
 def _google_token(scopes: list[str] | None = None) -> str:
     """Access token, as a person if GOOGLE_OAUTH_JSON is set, else as the service account.
     Requires `google-auth` (in requirements.txt). `scopes` defaults to calendar write, so existing
-    callers are unchanged; Sheets asks for its own."""
+    callers are unchanged; Sheets asks for its own.
+
+    Cached per scope set until two minutes before expiry. It used to refresh on every send_calendar
+    call, and the student fan-out calls that once per cohort calendar — so a publish paid for several
+    OAuth round trips before writing anything.
+    """
     from google.auth.transport.requests import Request   # type: ignore
 
     scopes = list(scopes or [CAL_SCOPE])
+    key = tuple(sorted(scopes))
+    with _token_lock:
+        hit = _tokens.get(key)
+    if hit and hit[1] - time.time() > 120:
+        return hit[0]
     if publishes_as_user():
         from google.oauth2.credentials import Credentials  # type: ignore
         d = _blob("GOOGLE_OAUTH_JSON")                   # {client_id, client_secret, refresh_token}
@@ -243,6 +303,9 @@ def _google_token(scopes: list[str] | None = None) -> str:
         if subject := os.environ.get("GOOGLE_IMPERSONATE"):   # domain-wide delegation, if configured
             creds = creds.with_subject(subject)
     creds.refresh(Request())
+    expiry = creds.expiry.replace(tzinfo=timezone.utc).timestamp() if creds.expiry else time.time() + 3000
+    with _token_lock:
+        _tokens[key] = (creds.token, expiry)
     return creds.token
 
 
@@ -290,16 +353,53 @@ def sync_availability(smes: list[dict], start_utc: str, end_utc: str, api=None) 
                        per_sme={s["id"]: len(s["external_busy"]) for s in out})
 
 
+def _body_hash(body: dict) -> str:
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def _write_one(row: dict, owned: dict, api, invite: bool, q: str) -> tuple[str, str | None, str | None, bool]:
+    """One event: (session_id, event_id, error, skipped). Pure HTTP — deliberately no store writes.
+
+    The store takes a process-wide lock, so 8 workers writing to it would serialise on that lock and
+    hand back the concurrency the pool just bought. The caller writes the whole batch once instead.
+    """
+    sid = row["session_id"]
+    email = row.get("sme_email")
+    body = event_body(row, email if invite and deliverable(email) else None)
+    digest = _body_hash(body)
+    known, known_hash = owned.get(sid, (None, None))
+    if known and known_hash and known_hash == digest:
+        return sid, known, None, True          # unchanged since the last publish: nothing to send
+    try:
+        if known:
+            try:
+                api("PUT", f"/{known}{q}", body)
+                return sid, known, None, False
+            except Exception as exc:
+                if getattr(exc, "code", None) not in (404, 410):
+                    raise
+                # deleted in Google — fall through and re-create it
+        created = api("POST", q, body)
+        return sid, created.get("id") or known, None, False
+    except Exception as exc:                   # one bad row must not sink the batch
+        return sid, None, f"{sid}: {type(exc).__name__}", False
+
+
 def send_calendar(rows: list[dict], audience: str, store=None, api=None, calendar_id: str | None = None) -> Result:
     """Create or update one event per class on one calendar. `api(method, path, body)` is injectable.
 
     `calendar_id` overrides GOOGLE_CALENDAR_ID so students can be published onto their own cohort
     calendar; the caller fans out per calendar and `merge()`s the results.
+
+    41 rows took ~16s: a fresh TCP+TLS handshake per event (urllib pools nothing), 41 serial writes,
+    and 41 separate DB round trips. Now: one pooled session, CAL_WORKERS in parallel, one batched
+    write at the end, and a row whose event body is unchanged is skipped entirely.
     """
     ready, why = google_ready()
     if not ready:
         return Result("simulated", f"Not sent — {why}.", len(rows))
     cal = calendar_id or os.environ["GOOGLE_CALENDAR_ID"]
+    t0 = time.perf_counter()
     if api is None:
         token = _google_token()
         base = "https://www.googleapis.com/calendar/v3/calendars"
@@ -310,33 +410,28 @@ def send_calendar(rows: list[dict], audience: str, store=None, api=None, calenda
     # account gets 403 forbiddenForServiceAccounts, so the teacher is named in the description only.
     invite = audience == "sme" and can_invite()
     q = "?sendUpdates=all" if invite else "?sendUpdates=none"
-    sent, failed = 0, []
-    owned = store.events_on(cal) if store else {}                # one round-trip for the whole batch
-    for row in rows:
-        known = owned.get(row["session_id"])
-        email = row.get("sme_email")
-        body = event_body(row, email if invite and deliverable(email) else None)
-        try:
-            if known:
-                try:
-                    api("PUT", f"/{known}{q}", body)
-                except Exception as exc:
-                    if getattr(exc, "code", None) not in (404, 410):
-                        raise
-                    if store:                                   # deleted in Google — re-create it
-                        store.forget_event(row["session_id"], cal)
-                    known = None
-            if not known:
-                created = api("POST", q, body)
-                if store and created.get("id"):
-                    store.remember_event(row["session_id"], cal, created["id"])
-            sent += 1
-        except Exception as exc:                                # one bad row must not sink the batch
-            failed.append(f"{row['session_id']}: {type(exc).__name__}")
+    # one round-trip for the whole batch, carrying the hash that lets an unchanged row be skipped
+    owned = store.owned_on(cal) if store else {}
+
+    if len(rows) > 1 and CAL_WORKERS > 1:
+        with ThreadPoolExecutor(max_workers=min(CAL_WORKERS, len(rows))) as pool:
+            results = list(pool.map(lambda r: _write_one(r, owned, api, invite, q), rows))
+    else:
+        results = [_write_one(r, owned, api, invite, q) for r in rows]
+
+    sent = [(sid, eid, _body_hash(event_body(r, r.get("sme_email") if invite and deliverable(r.get("sme_email")) else None)))
+            for r, (sid, eid, err, skipped) in zip(rows, results) if eid and not err]
+    failed = [err for _, _, err, _ in results if err]
+    skipped = sum(1 for _, _, _, sk in results if sk)
+    if store and sent:
+        store.remember_events(cal, sent)       # one write, not one per row
+    took = time.perf_counter() - t0
     if failed and not sent:
         return Result("error", f"Calendar rejected every event ({failed[0]}).", 0, True)
-    detail = f"{sent} event(s) written to {cal}" + (f"; {len(failed)} failed" if failed else "")
-    return Result("sent" if sent else "skipped", detail, sent, True)
+    detail = (f"{len(sent)} event(s) written to {cal} in {took:.1f}s"
+              + (f"; {skipped} unchanged and skipped" if skipped else "")
+              + (f"; {len(failed)} failed" if failed else ""))
+    return Result("sent" if sent else "skipped", detail, len(sent), True)
 
 
 def send_email(rows: list[dict], audience: str, recipients: list[str], week_label: str, api=None) -> Result:

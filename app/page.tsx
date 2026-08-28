@@ -478,22 +478,26 @@ export default function Page() {
     const token = pubToken.current + 1;
     pubToken.current = token;
     setPubStatus(Object.fromEntries(list.map((l) => [l.id, "sending" as SendState])));
-    let anyLive = false;
-    for (const l of list) {
-      if (pubToken.current !== token) return;          // cancelled mid-flight
+    // Concurrent, but each leaf still reports the moment it lands — that per-leaf feedback is the
+    // reason the loop was serial, and it is worth keeping. Wall clock becomes the slowest leaf
+    // instead of the sum of all six.
+    const live = await Promise.all(list.map(async (l) => {
       try {
         const res = await publishLeaf({
           week: WEEKS[week].iso, week_label: WEEKS[week].label, channel: l.channel.key, audience: l.audience.key,
           rows, smes: rosterFor("next"), batches,
         });
-        if (pubToken.current !== token) return;
-        anyLive = anyLive || res.live;
+        if (pubToken.current !== token) return false;   // cancelled mid-flight, per callback
         setPubStatus((s) => ({ ...s, [l.id]: res.status as SendState }));   // sent | simulated | skipped | error
+        return res.live;
       } catch {
-        setPubStatus((s) => ({ ...s, [l.id]: "idle" }));
+        if (pubToken.current === token) setPubStatus((s) => ({ ...s, [l.id]: "idle" }));
+        return false;
       }
-    }
+    }));
     if (pubToken.current !== token) return;
+    // reduced after the fact rather than written from several callbacks
+    const anyLive = live.some(Boolean);
     setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
     setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
     setPublished((p) => ({ ...p, [week]: true }));
