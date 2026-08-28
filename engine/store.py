@@ -40,10 +40,36 @@ SCHEMA = [
         session_id  TEXT NOT NULL,
         calendar_id TEXT NOT NULL,
         event_id    TEXT NOT NULL,
+        body_hash   TEXT,
         updated_at  TEXT NOT NULL,
         PRIMARY KEY (session_id, calendar_id)
     )""",
+    # Every override is a labelled human (or agent) disagreement with the matcher, and the override
+    # rate over time is the trust metric. In page state it died on refresh.
+    """CREATE TABLE IF NOT EXISTS override_log (
+        id          {serial},
+        week        TEXT NOT NULL,
+        session_id  TEXT NOT NULL,
+        batch_id    TEXT NOT NULL,
+        from_sme_id TEXT,
+        to_sme_id   TEXT NOT NULL,
+        actor       TEXT NOT NULL,
+        rule_risk   TEXT,
+        at          TEXT NOT NULL
+    )""",
+    # What the app boots from. A row here overrides the bundled data/*.json of the same name, so seed
+    # JSON becomes the documented default source rather than the only possible one.
+    """CREATE TABLE IF NOT EXISTS dataset (
+        name        TEXT PRIMARY KEY,
+        payload     TEXT NOT NULL,
+        source      TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""",
 ]
+
+# Added after calendar_event shipped. SQLite cannot ADD COLUMN IF NOT EXISTS, so this runs
+# unconditionally and a duplicate-column error is the expected no-op on an existing database.
+MIGRATIONS = ["ALTER TABLE calendar_event ADD COLUMN body_hash TEXT"]
 
 
 def now() -> str:
@@ -118,6 +144,12 @@ class Store:
     def _init(self) -> None:
         for stmt in SCHEMA:
             self._run(stmt, retry=False)
+        for stmt in MIGRATIONS:
+            try:
+                self._run(stmt, retry=False)
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
+                    raise
 
     # ---- schedule ----
 
@@ -155,6 +187,63 @@ class Store:
         keys = ("week", "channel", "audience", "status", "detail", "live", "at")
         return [{**dict(zip(keys, r)), "live": bool(r[5])} for r in (rows or [])]
 
+    # ---- override log (the trust metric) ----
+
+    def record_overrides(self, week: str, entries: list[dict], actor: str = "human") -> int:
+        """One row per override. `entries` is what apply_approvals already returns, so the pure
+        engine stays pure and the route that has a database does the writing."""
+        at = now()
+        wrote = 0
+        for e in entries or []:
+            if not e.get("to_sme_id"):
+                continue
+            self._run("INSERT INTO override_log (week, session_id, batch_id, from_sme_id, to_sme_id, "
+                      "actor, rule_risk, at) VALUES (?,?,?,?,?,?,?,?)",
+                      (week, e["session_id"], e.get("batch_id") or "", e.get("from_sme_id"),
+                       e["to_sme_id"], e.get("actor") or actor, e.get("rule_risk"), at))
+            wrote += 1
+        return wrote
+
+    def overrides(self, week: str | None = None, limit: int = 100) -> list[dict]:
+        keys = ("week", "session_id", "batch_id", "from_sme_id", "to_sme_id", "actor", "rule_risk", "at")
+        cols = ", ".join(keys)
+        if week:
+            rows = self._run(f"SELECT {cols} FROM override_log WHERE week = ? ORDER BY id DESC LIMIT ?",
+                             (week, limit), fetch="all")
+        else:
+            rows = self._run(f"SELECT {cols} FROM override_log ORDER BY id DESC LIMIT ?", (limit,), fetch="all")
+        return [dict(zip(keys, r)) for r in (rows or [])]
+
+    def override_counts(self) -> dict[str, int]:
+        """week -> how many distinct sessions were overridden in it. Distinct, because overriding the
+        same class twice is one disagreement, not two."""
+        rows = self._run("SELECT week, COUNT(DISTINCT session_id) FROM override_log GROUP BY week", fetch="all")
+        return {r[0]: int(r[1]) for r in (rows or [])}
+
+    # ---- datasets the app boots from ----
+
+    def save_dataset(self, name: str, payload, source: str) -> None:
+        blob = json.dumps(payload)
+        if self.driver == "postgres":
+            self._run("INSERT INTO dataset (name, payload, source, updated_at) VALUES (?,?,?,?) "
+                      "ON CONFLICT (name) DO UPDATE SET payload = EXCLUDED.payload, "
+                      "source = EXCLUDED.source, updated_at = EXCLUDED.updated_at",
+                      (name, blob, source, now()))
+        else:
+            self._run("INSERT OR REPLACE INTO dataset (name, payload, source, updated_at) VALUES (?,?,?,?)",
+                      (name, blob, source, now()))
+
+    def load_datasets(self) -> dict[str, dict]:
+        rows = self._run("SELECT name, payload, source, updated_at FROM dataset", fetch="all")
+        return {r[0]: {"payload": json.loads(r[1]), "source": r[2], "updated_at": r[3]} for r in (rows or [])}
+
+    def reset_datasets(self) -> int:
+        """Back to the bundled seed data. Doubles as demo safety: a reviewer who mangles the roster
+        recovers in one click."""
+        before = len(self.load_datasets())
+        self._run("DELETE FROM dataset")
+        return before
+
     # ---- calendar events we own (so a re-publish updates instead of duplicating) ----
 
     def remember_event(self, session_id: str, calendar_id: str, event_id: str) -> None:
@@ -166,6 +255,34 @@ class Store:
         else:
             self._run("INSERT OR REPLACE INTO calendar_event (session_id, calendar_id, event_id, updated_at) "
                       "VALUES (?,?,?,?)", (session_id, calendar_id, event_id, now()))
+
+    def remember_events(self, calendar_id: str, pairs: list[tuple[str, str, str | None]]) -> None:
+        """[(session_id, event_id, body_hash)] in a single round trip.
+
+        41 separate writes cost 41 cross-region round trips on a managed Postgres, and they were
+        serialising on the process-wide lock behind a thread pool that had already finished its work.
+        """
+        if not pairs:
+            return
+        at = now()
+        values = [(calendar_id, sid, eid, h, at) for sid, eid, h in pairs]
+        rows = ",".join(["(?,?,?,?,?)"] * len(values))
+        args = tuple(x for cal, sid, eid, h, t in values for x in (sid, cal, eid, h, t))
+        if self.driver == "postgres":
+            self._run(f"INSERT INTO calendar_event (session_id, calendar_id, event_id, body_hash, updated_at) "
+                      f"VALUES {rows} ON CONFLICT (session_id, calendar_id) DO UPDATE SET "
+                      f"event_id = EXCLUDED.event_id, body_hash = EXCLUDED.body_hash, "
+                      f"updated_at = EXCLUDED.updated_at", args)
+        else:
+            self._run(f"INSERT OR REPLACE INTO calendar_event (session_id, calendar_id, event_id, "
+                      f"body_hash, updated_at) VALUES {rows}", args)
+
+    def owned_on(self, calendar_id: str) -> dict[str, tuple[str, str | None]]:
+        """{session_id: (event_id, body_hash)} — one query for the whole batch, so a re-publish can
+        skip a row whose event body has not changed."""
+        rows = self._run("SELECT session_id, event_id, body_hash FROM calendar_event WHERE calendar_id = ?",
+                         (calendar_id,), fetch="all")
+        return {r[0]: (r[1], r[2]) for r in (rows or [])}
 
     def events_on(self, calendar_id: str) -> dict[str, str]:
         """{session_id: event_id} for every event we own on one calendar — one query, not one per row."""

@@ -770,6 +770,29 @@ async function features(ev, wait, settle, b) {
   await ev(`if (sheet()) byPart('[role="dialog"] button', "Close") ? byPart('[role="dialog"] button', "Close").click() : (byPart('[role="dialog"] button', "Cancel") && byPart('[role="dialog"] button', "Cancel").click()); return true;`);
   await sleepMs(300);
 
+  console.log("\n=== FEATURES: an import survives a refresh, and Reset restores the seed week ===");
+  const savedProv = await ev(`return norm(document.body.innerText).match(/Sessions: [^\\n]{0,140}/)?.[0] || ""`);
+  ok(/CSV upload|Google Sheet|seed data/.test(savedProv), `provenance before reload: ${savedProv.slice(0, 80)}`);
+  await b.goto("http://localhost:3000/");
+  await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
+  const afterReload = await ev(`
+    const line = norm(document.body.innerText).match(/Sessions: [^\\n]{0,140}/)?.[0] || "";
+    return { line, reset: !!byPart("button", "Reset to seed data"), rows: cards().length };`);
+  ok(/CSV upload|Google Sheet/.test(afterReload.line),
+    `the imported datasets survive a refresh: ${afterReload.line.slice(0, 90)}`, afterReload);
+  ok(afterReload.reset, "and Reset to seed data is offered", afterReload);
+
+  await ev(`window.confirm = () => true; clickPart("button", "Reset to seed data"); return true;`);
+  const resetToast = await global.__waitToast(/bundled seed week/, 60000);
+  ok(!!resetToast, `Reset restores the bundled week: ${resetToast}`);
+  const afterReset = await wait(`
+    const line = norm(document.body.innerText).match(/Sessions: [^\\n]{0,140}/)?.[0] || "";
+    return /Sessions: seed data/.test(line) ? { line } : null;`, "provenance to read seed data", 30000).catch(() => null);
+  ok(!!afterReset, "and the provenance line says seed data again", afterReset);
+  // the reload above landed on the dashboard; the next section edits a profile
+  await ev(`const nav = all("nav button").find((x) => /SME management/.test(x.title || "")); if (nav) nav.click(); return true;`);
+  await wait(`return !!byPart("button", "Edit")`, "SME management", 20000);
+
   console.log("\n=== FEATURES: edit an SME profile ===");
   await ev(`clickPart("button", "Edit"); return true;`);
   await sleepMs(500);

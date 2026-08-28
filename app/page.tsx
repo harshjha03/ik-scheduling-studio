@@ -15,8 +15,9 @@ import type {
   Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
 import {
-  agentApply, agentRun, getIntegrations, loadSchedule, publishLeaf, pullSheet, pushSheet, runMatching,
-  saveSchedule, submitApprovals, syncAvailability, type IntegrationsInfo,
+  agentApply, agentRun, getData, getIntegrations, getOverrides, loadSchedule, publishLeaf, pullSheet,
+  pushSheet, putData, resetData, runMatching, saveSchedule, submitApprovals, syncAvailability,
+  type IntegrationsInfo, type OverrideStats,
 } from "@/lib/api";
 import { isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { csvExporter } from "@/lib/export";
@@ -74,6 +75,10 @@ const ALL_LEAVES: Record<string, boolean> = Object.fromEntries(
 );
 
 export default function Page() {
+  // Bundled seed data is the initial state, so first paint is identical with the API unreachable.
+  // A /api/data fetch below replaces whatever has been stored since; there is no loading state.
+  const [sessionData, setSessionData] = useState<Record<WeekKey, Session[]>>(SESSIONS);
+  const [smeData, setSmeData] = useState<Record<WeekKey, SME[]>>(SMES);
   const [role, setRole] = useState<Role>("coordinator");
   const [mod, setMod] = useState<ModuleKey>("dashboard");
   const [week, setWeek] = useState<WeekKey>("next");
@@ -129,6 +134,7 @@ export default function Page() {
   const [sheetBusy, setSheetBusy] = useState(false);
   // where each dataset came from, so the live source is visible instead of being a README claim
   const [provenance, setProvenance] = useState<DataProvenance>({});
+  const [overrideStats, setOverrideStats] = useState<OverrideStats | null>(null);
   // assignment history drives Stage B's fairness and performance terms; an import replaces it
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>(HISTORY);
   const [histImp, setHistImp] = useState<ImportResult<ImportedHistory>>(emptyImport);
@@ -153,6 +159,34 @@ export default function Page() {
   useEffect(() => {
     // never claim a live source: the labels come from the server, and absence is shown as simulated
     getIntegrations().then(setIntegrations).catch(() => setIntegrations(null));
+    getOverrides().then(setOverrideStats).catch(() => setOverrideStats(null));
+    // Hydrate, do not block: state already holds the bundled seed data, so a failure here leaves the
+    // app exactly as it boots today rather than showing a spinner or a blank screen.
+    getData().then(({ datasets }) => {
+      const prov: DataProvenance = {};
+      const mark = (key: string, name: string) => {
+        const d = datasets[name];
+        if (d && d.source !== "seed" && d.updated_at) prov[key] = { source: d.source, at: d.updated_at };
+      };
+      const next = datasets.sessions_next?.payload as Session[] | undefined;
+      const cur = datasets.sessions_current?.payload as Session[] | undefined;
+      if (next?.length || cur?.length) {
+        setSessionData((s) => ({ next: next?.length ? next : s.next, current: cur?.length ? cur : s.current }));
+      }
+      const roster = datasets.smes?.payload as SME[] | undefined;
+      const rosterCur = datasets.smes_current?.payload as SME[] | undefined;
+      if (roster?.length || rosterCur?.length) {
+        setSmeData((s) => ({ next: roster?.length ? roster : s.next, current: rosterCur?.length ? rosterCur : s.current }));
+      }
+      const hist = datasets.history?.payload as HistoryRecord[] | undefined;
+      if (hist?.length) setHistoryRecords(hist);
+      const bts = datasets.batches?.payload as Batch[] | undefined;
+      if (bts?.length) setBatches(bts);
+      mark("sessions", "sessions_next");
+      mark("smes", "smes");
+      mark("history", "history");
+      setProvenance((p) => ({ ...prov, ...p }));
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -168,7 +202,7 @@ export default function Page() {
 
   /** The seed roster plus whatever ops added or edited this session — imports and profile edits. */
   const rosterFor = useCallback((w: WeekKey): SME[] => (
-    [...SMES[w], ...extraSmes].map((s) => {
+    [...smeData[w], ...extraSmes].map((s) => {
       const merged = smeEdits[s.id] ? { ...s, ...smeEdits[s.id] } : s;
       // a synced calendar block is a hard rule in Stage A, so it travels with the roster
       return externalBusy[s.id]?.length ? { ...merged, external_busy: externalBusy[s.id] } : merged;
@@ -180,7 +214,7 @@ export default function Page() {
   /** Seeded sessions plus anything ops added, with copilot reschedules folded in. A reschedule only
    *  changes when a class runs, so it is an edit layer over the fixtures — not a new session. */
   const sessionsFor = useCallback((w: WeekKey, edits: Record<string, string> = sessionEdits): Session[] => {
-    const list = w === "next" ? [...SESSIONS.next, ...extraSessions] : SESSIONS.current;
+    const list = w === "next" ? [...sessionData.next, ...extraSessions] : sessionData.current;
     return list.map((x) => (edits[x.id] ? { ...x, start_utc: edits[x.id] } : x));
   }, [extraSessions, sessionEdits]);
 
@@ -242,7 +276,7 @@ export default function Page() {
     (async () => {
       setLoading(true);
       try {
-        const cur = await runMatching(SESSIONS.current, SMES.current, HISTORY, [], { llm: false });
+        const cur = await runMatching(sessionData.current, smeData.current, HISTORY, [], { llm: false });
         if (!alive) return;
         setRuns((s) => ({ ...s, current: cur }));
         setApproved(new Set(cur.draft.filter((r) => r.sme_id).map((r) => r.session_id)));
@@ -259,8 +293,8 @@ export default function Page() {
           say(`Restored the draft you saved at ${new Date(saved.updated_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}.`);
           return;
         }
-        const history = weekAsHistory(cur.draft, SMES.next, WEEKS.current.iso, HISTORY);
-        const nxt = await runMatching(SESSIONS.next, SMES.next, history, [], { llm: true });
+        const history = weekAsHistory(cur.draft, smeData.next, WEEKS.current.iso, HISTORY);
+        const nxt = await runMatching(sessionData.next, smeData.next, history, [], { llm: true });
         if (!alive) return;
         nextRef.current = nxt.draft;
         setRuns((s) => ({ ...s, next: nxt }));
@@ -284,7 +318,7 @@ export default function Page() {
   const isPublished = !!published[week];
 
   const weekDates = useMemo(() => {
-    const first = SESSIONS[week][0]?.start_utc ?? new Date().toISOString();
+    const first = sessionData[week][0]?.start_utc ?? new Date().toISOString();
     const p0 = istParts(first);
     const base = new Date(new Date(first).getTime() - p0.day * 864e5);
     return META.days.map((d, i) => ({ day: d, date: istParts(new Date(base.getTime() + i * 864e5).toISOString()).date }));
@@ -303,6 +337,22 @@ export default function Page() {
     () => new Map(work.map((w) => [w.key, autoFix(w, rows, smes)])),
     [work, rows, smes],
   );
+  /** This week's override rate against the week before it — the number that should fall over time. */
+  const overrideRate = useMemo(() => {
+    const by = overrideStats?.by_week;
+    if (!by) return null;
+    const weeks = Object.keys(by).sort();
+    const iso = WEEKS[week].iso;
+    const here = by[iso];
+    const prevIso = weeks.filter((w) => w < iso).pop();
+    const live = here ?? { overridden: 0, assigned: rows.filter((r) => r.sme_id).length, rate: 0 };
+    return {
+      rate: live.assigned ? (live.overridden / live.assigned) : null,
+      prev: prevIso && by[prevIso].assigned ? by[prevIso].overridden / by[prevIso].assigned : null,
+      overridden: live.overridden, assigned: live.assigned,
+    };
+  }, [overrideStats, week, rows]);
+
   const unfilledCount = rows.filter((r) => !r.sme_id).length;
   const conflictCount = rows.filter((r) => r.flags.some((f) => f.code === "HARD_CONFLICT")).length;
 
@@ -473,7 +523,8 @@ export default function Page() {
         .map((r) => decisions[r.session_id]
           ?? (approved.has(r.session_id) ? { session_id: r.session_id, action: "approve" as const } : null))
         .filter(Boolean) as Decision[];
-      const out = await submitApprovals(run.draft, decs);
+      const out = await submitApprovals(run.draft, decs, WEEKS[week].iso, "human");
+      getOverrides().then(setOverrideStats).catch(() => {});
       await csvExporter.export(out.export_rows, `ik-schedule-${WEEKS[week].iso}`);
       const risky = out.final_schedule.filter((r) => r.flags.some((f) => f.code === "RULE_OVERRIDE_RISK"));
       say(risky.length ? `CSV exported — ${risky.length} override(s) flagged OVERRIDE RISK.` : "CSV exported.");
@@ -508,7 +559,7 @@ export default function Page() {
 
   /** Teachers who carry the topic, work that hour and are not already booked in it. */
   const freeFor = useCallback((topic: string, day: number, hour: number, level: number): SME[] => {
-    const ref = SESSIONS.next[0]?.start_utc;
+    const ref = sessionData.next[0]?.start_utc;
     if (!ref) return [];
     const nextRows = runs.next?.draft ?? [];
     return smesFor("next").filter((s) => s.topics.includes(topic))
@@ -519,7 +570,7 @@ export default function Page() {
 
   const addClass = async () => {
     const bt = batches.find((b) => b.id === selBatch) ?? batches[0];
-    const ref = SESSIONS.next[0].start_utc;
+    const ref = sessionData.next[0].start_utc;
     const p0 = istParts(ref);
     const at = new Date(new Date(ref).getTime() + (newClass.day - p0.day) * 864e5 + (newClass.hour - p0.hour) * 36e5);
     const level = META.levels.indexOf(bt.level) + 1;
@@ -571,7 +622,7 @@ export default function Page() {
   const parseClasses = useCallback((name: string, text: string) => setImp(parseClassImport(name, text, {
     courses: COURSES, levels: META.levels, types: META.type_label, days: META.days,
     hours: META.hours, taken: takenSlots(), smes: smesFor("next"),
-    isAvailable: (s, d, h) => isAvailable(s, SESSIONS.next[0].start_utc, d, h),
+    isAvailable: (s, d, h) => isAvailable(s, sessionData.next[0].start_utc, d, h),
   })), [rows, smesFor]);
 
   const parseSmes = useCallback((name: string, text: string) => setSmeImp(parseSmeImport(name, text, {
@@ -616,11 +667,35 @@ export default function Page() {
     }
   };
 
+  /** Back to the bundled seed week — demo safety, and the honest way to undo a bad import. */
+  const resetToSeed = async () => {
+    if (!window.confirm("Discard imported sessions, roster and history, and go back to the bundled seed week?")) return;
+    try {
+      await resetData();
+      setSessionData(SESSIONS);
+      setSmeData(SMES);
+      setHistoryRecords(HISTORY);
+      setBatches(BATCHES0);
+      setExtraSessions([]);
+      setExtraSmes([]);
+      setSessionEdits({});
+      setSmeEdits({});
+      setProvenance({});
+      setPulled({});
+      await runNext({ sessions: SESSIONS.next, smes: SMES.next, quiet: true });
+      say("Back to the bundled seed week.");
+    } catch (e) {
+      say(String(e).slice(0, 160));
+    }
+  };
+
   /** An imported history replaces what Stage B scores fairness and performance from. */
   const runHistoryImport = async () => {
     const recs = histImp.rows.map(toHistoryRecord) as HistoryRecord[];
     setHistoryRecords(recs);
-    setProvenance((p) => ({ ...p, history: pulled.history ?? { source: "CSV upload", at: new Date().toISOString(), rows: recs.length } }));
+    const srcH = pulled.history?.source ?? "CSV upload";
+    setProvenance((p) => ({ ...p, history: pulled.history ?? { source: srcH, at: new Date().toISOString(), rows: recs.length } }));
+    void putData("history", recs, srcH).catch(() => {});
     setHistImp(emptyImport());
     setSheet(null);
     await runNext({ quiet: true });
@@ -636,7 +711,7 @@ export default function Page() {
         .map((r) => decisions[r.session_id]
           ?? (approved.has(r.session_id) ? { session_id: r.session_id, action: "approve" as const } : null))
         .filter(Boolean) as Decision[];
-      const out = await submitApprovals(run.draft, decs);
+      const out = await submitApprovals(run.draft, decs, WEEKS[week].iso, "human");
       const res = await pushSheet(WEEKS[week].iso, WEEKS[week].label, out.export_rows);
       say(res.live ? res.detail : `${res.detail} Set SHEET_ID and Google credentials to write for real.`);
     } catch (e) {
@@ -649,7 +724,7 @@ export default function Page() {
   /** Imported classes become real sessions and go through the same pipeline as everything else —
    *  a named teacher rides in as an override so the engine honours it or says why it cannot. */
   const runImport = async () => {
-    const ref = SESSIONS.next[0].start_utc;
+    const ref = sessionData.next[0].start_utc;
     const p0 = istParts(ref);
     const known = new Set(batches.map((b) => b.id));
     const fresh: Batch[] = [];
@@ -693,7 +768,9 @@ export default function Page() {
     setMod("dashboard");
     setTab("schedule");
     setWeek("next");
-    setProvenance((p) => ({ ...p, sessions: pulled.sessions ?? { source: "CSV upload", at, rows: imp.rows.length } }));
+    const srcS = pulled.sessions?.source ?? "CSV upload";
+    setProvenance((p) => ({ ...p, sessions: pulled.sessions ?? { source: srcS, at, rows: imp.rows.length } }));
+    void putData("sessions_next", [...sessionsFor("next"), ...sessions], srcS).catch(() => {});
     await runNext({ sessions: [...sessionsFor("next"), ...sessions], overrides: [...named, ...overrides], quiet: true });
     say(`${imp.rows.length} classes imported${fresh.length ? ` · ${fresh.length} new batch${fresh.length === 1 ? "" : "es"}` : ""}.`);
   };
@@ -702,7 +779,9 @@ export default function Page() {
   const runSmeImport = async () => {
     const added = smeImp.rows.map((r) => toSme(r, META.days, META.levels));
     setExtraSmes((s) => [...s, ...added]);
-    setProvenance((p) => ({ ...p, smes: pulled.smes ?? { source: "CSV upload", at: new Date().toISOString(), rows: added.length } }));
+    const src = pulled.smes?.source ?? "CSV upload";
+    setProvenance((p) => ({ ...p, smes: pulled.smes ?? { source: src, at: new Date().toISOString(), rows: added.length } }));
+    void putData("smes", [...smeData.next, ...added], src).catch(() => {});
     setSheet(null);
     setSmeImp(emptyImport());
     setSmeFilter("all");
@@ -753,7 +832,7 @@ export default function Page() {
 
   /** Read the week's calendars, then re-draft against what is already booked. */
   const runAvailabilitySync = async () => {
-    const first = SESSIONS.next[0]?.start_utc;
+    const first = sessionData.next[0]?.start_utc;
     if (!first) return;
     const start = new Date(new Date(first).getTime() - istParts(first).day * 864e5);
     const end = new Date(start.getTime() + 7 * 864e5);
@@ -825,6 +904,7 @@ export default function Page() {
         { session_id: e.session_id, action: "override" as const, override_sme_id: e.to_sme_id }])) }));
       if (published.next) setPublished((p) => ({ ...p, next: false }));
       void saveSchedule(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }).catch(() => {});
+      getOverrides().then(setOverrideStats).catch(() => {});
       return true;
     } catch (e) {
       say(String(e).slice(0, 160));
@@ -848,7 +928,7 @@ export default function Page() {
       upgrades.forEach((u) => {
         nextEdits[u.sme_id] = { ...nextEdits[u.sme_id], training_level: u.to_level, level: META.levels[u.to_level - 1] };
       });
-      const roster = [...SMES.next, ...extraSmes].map((x) => (nextEdits[x.id] ? { ...x, ...nextEdits[x.id] } : x));
+      const roster = [...smeData.next, ...extraSmes].map((x) => (nextEdits[x.id] ? { ...x, ...nextEdits[x.id] } : x));
       setSessionEdits(edits);
       setSmeEdits(nextEdits);
       setOverrides((log) => [
@@ -1550,6 +1630,8 @@ export default function Page() {
               onSmes={() => { setMod("smes"); setSheet(null); }}
               onShowAll={() => { setTab("schedule"); setStatusOff({}); setBatchFilter("all"); }}
               onWork={() => setSheet({ kind: "work" })}
+              overrideRate={overrideRate}
+              onOverrides={() => { setTab("overrides"); setSheet(null); }}
             />
           )}
           <Dashboard
@@ -1644,6 +1726,11 @@ export default function Page() {
                   const o = provenance[key];
                   return `${label}: ${o ? `${o.source}, synced ${ago(o.at)}` : "seed data"}`;
                 }).join(" · ")}
+                {Object.keys(provenance).length > 0 && (
+                  <button className="btn-quiet ml-[8px] text-[11px]" onClick={() => void resetToSeed()}>
+                    Reset to seed data
+                  </button>
+                )}
               </div>
             )}
           </div>

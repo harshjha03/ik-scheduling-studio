@@ -15,6 +15,9 @@ interface Props {
   onSmes: () => void;
   onShowAll: () => void;
   onWork: () => void;
+  /** overrides as a share of assigned sessions, this week and the one before — the trust metric */
+  overrideRate?: { rate: number | null; prev: number | null; overridden: number; assigned: number } | null;
+  onOverrides: () => void;
 }
 
 function Card({ label, value, unit, sub, dot, tone = "plain", onClick, tip }: {
@@ -47,7 +50,7 @@ function Card({ label, value, unit, sub, dot, tone = "plain", onClick, tip }: {
 
 export default function KpiCards({
   rows, smes, batches, approved, leaveCount, workCount, unfilled, conflicts, advisory,
-  onBatches, onSmes, onShowAll, onWork,
+  onBatches, onSmes, onShowAll, onWork, overrideRate, onOverrides,
 }: Props) {
   const k = kpis(rows, smes, batches, approved);
   return (
@@ -67,6 +70,20 @@ export default function KpiCards({
         sub={`${k.byType.class} classes · ${k.byType.doubt} doubt · ${k.byType.mock} mocks`}
         tip="Show every status on the calendar" onClick={onShowAll}
       />
+      {overrideRate && (
+        <Card
+          label="Override rate"
+          value={overrideRate.rate === null ? "—" : `${Math.round(overrideRate.rate * 100)}%`}
+          unit={overrideRate.assigned ? `of ${overrideRate.assigned}` : ""}
+          dot={overrideRate.rate !== null && overrideRate.prev !== null && overrideRate.rate <= overrideRate.prev ? "#0f7a52" : "#8a6512"}
+          tone={overrideRate.rate !== null && overrideRate.prev !== null && overrideRate.rate <= overrideRate.prev ? "good" : "plain"}
+          sub={overrideRate.prev === null
+            ? `${overrideRate.overridden} class(es) changed by hand — no earlier week to compare`
+            : `${overrideRate.overridden} changed by hand · ${overrideRate.rate !== null && overrideRate.rate <= overrideRate.prev ? "down" : "up"} from ${Math.round(overrideRate.prev * 100)}% last week`}
+          tip="Every override is a labelled disagreement with the matcher — open the log"
+          onClick={onOverrides}
+        />
+      )}
       <Card
         label="Needs a decision" value={workCount} unit={workCount === 1 ? "item" : "items"}
         dot={workCount ? "#c0392b" : "#0f7a52"} tone={workCount ? "alert" : "good"}

@@ -22,8 +22,9 @@ export function runMatching(
   return post<RunResult>("/api/run", { sessions, smes, history, overrides: payload, llm: opts.llm !== false });
 }
 
-export function submitApprovals(draft: DraftRow[], decisions: Decision[]) {
-  return post<ApprovalsResult>("/api/approvals", { draft, decisions });
+/** `week` and `actor` are what let the server record each override — omit them and nothing is logged. */
+export function submitApprovals(draft: DraftRow[], decisions: Decision[], week?: string, actor?: string) {
+  return post<ApprovalsResult>("/api/approvals", { draft, decisions, week, actor });
 }
 
 export interface PublishResult { status: "sent" | "simulated" | "skipped" | "error"; detail: string; count: number; live: boolean }
@@ -88,6 +89,38 @@ export async function getIntegrations(): Promise<IntegrationsInfo> {
 }
 
 export interface SheetResult extends PublishResult { csv?: string; tab?: string }
+
+export interface DatasetBundle {
+  datasets: Record<string, { payload: unknown; source: string; updated_at: string | null }>;
+}
+
+/** What the app boots from: a stored dataset where one exists, the bundled seed JSON otherwise. */
+export async function getData(): Promise<DatasetBundle> {
+  const res = await fetch("/api/data");
+  if (!res.ok) throw new Error(`/api/data → ${res.status}`);
+  return res.json();
+}
+
+/** Persist a dataset the coordinator has just confirmed. */
+export function putData(name: string, payload: unknown, source: string) {
+  return post<{ saved: string; source: string; rows: number }>(`/api/data/${name}`, { payload, source });
+}
+
+/** Back to the bundled seed week. */
+export function resetData() {
+  return post<{ cleared: number }>("/api/data/reset", {});
+}
+
+export interface OverrideStats {
+  entries: { week: string; session_id: string; batch_id: string; from_sme_id: string | null; to_sme_id: string; actor: string; rule_risk: string | null; at: string }[];
+  by_week: Record<string, { overridden: number; assigned: number; rate: number | null }>;
+}
+
+export async function getOverrides(week?: string): Promise<OverrideStats> {
+  const res = await fetch(`/api/overrides${week ? `?week=${encodeURIComponent(week)}` : ""}`);
+  if (!res.ok) throw new Error(`/api/overrides → ${res.status}`);
+  return res.json();
+}
 
 export interface AvailabilityResult extends PublishResult {
   smes: SME[];

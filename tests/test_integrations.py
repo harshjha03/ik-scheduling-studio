@@ -488,3 +488,97 @@ def test_seed_roster_hours_are_converted_back_to_ist():
     assert IN._to_ist_hhmm("03:30") == "09:00"
     assert IN._to_ist_hhmm("02:30") == "08:00"
     assert IN._to_ist_hhmm("14:30") == "20:00"
+
+
+# ---------------- the override log (the trust metric) ----------------
+
+def test_override_log_records_who_changed_what(db):
+    entries = [{"session_id": "S1", "batch_id": "B1", "from_sme_id": "T01", "to_sme_id": "T02", "rule_risk": None},
+               {"session_id": "S2", "batch_id": "B1", "from_sme_id": None, "to_sme_id": "T03",
+                "rule_risk": "outside subject expertise"}]
+    assert db.record_overrides("2026-W37", entries) == 2
+    got = db.overrides("2026-W37")
+    assert [o["session_id"] for o in got] == ["S2", "S1"]          # newest first
+    assert {o["actor"] for o in got} == {"human"}
+    assert got[0]["rule_risk"] == "outside subject expertise"
+    assert db.record_overrides("2026-W37", [{"session_id": "S3", "batch_id": "B1", "to_sme_id": "T04"}],
+                               actor="agent") == 1
+    assert next(o for o in db.overrides() if o["session_id"] == "S3")["actor"] == "agent"
+
+
+def test_an_entry_with_no_target_is_not_an_override(db):
+    """A 'change requested' event carries no to_sme_id; logging it would inflate the rate."""
+    assert db.record_overrides("2026-W37", [{"session_id": "S1", "batch_id": "B1", "to_sme_id": ""}]) == 0
+    assert db.overrides() == []
+
+
+def test_override_counts_are_per_week_and_distinct(db):
+    for to in ("T02", "T03"):                                   # same class overridden twice
+        db.record_overrides("2026-W37", [{"session_id": "S1", "batch_id": "B1", "to_sme_id": to}])
+    db.record_overrides("2026-W36", [{"session_id": "S9", "batch_id": "B1", "to_sme_id": "T04"}])
+    assert db.override_counts() == {"2026-W36": 1, "2026-W37": 1}, "one class changed twice is one disagreement"
+
+
+# ---------------- the dataset table ----------------
+
+def test_datasets_round_trip_and_reset(db):
+    assert db.load_datasets() == {}
+    db.save_dataset("smes", [{"id": "T99"}], "sheet")
+    got = db.load_datasets()["smes"]
+    assert got["payload"] == [{"id": "T99"}] and got["source"] == "sheet" and got["updated_at"]
+    db.save_dataset("smes", [{"id": "T98"}], "csv")              # same name replaces, not duplicates
+    assert db.load_datasets()["smes"]["payload"] == [{"id": "T98"}]
+    assert db.reset_datasets() == 1 and db.load_datasets() == {}
+
+
+# ---------------- batched calendar writes ----------------
+
+def test_remember_events_writes_the_batch_in_one_call(db):
+    db.remember_events("cal", [("S1", "e1", "h1"), ("S2", "e2", None)])
+    assert db.owned_on("cal") == {"S1": ("e1", "h1"), "S2": ("e2", None)}
+    assert db.events_on("cal") == {"S1": "e1", "S2": "e2"}       # the older view still works
+    db.remember_events("cal", [("S1", "e1b", "h2")])             # upsert, not a duplicate row
+    assert db.owned_on("cal")["S1"] == ("e1b", "h2")
+    db.remember_events("cal", [])                                # nothing to do, no query
+    assert len(db.owned_on("cal")) == 2
+
+
+def test_body_hash_survives_a_database_that_predates_it(tmp_path):
+    """The column was added after calendar_event shipped; SQLite cannot ADD COLUMN IF NOT EXISTS, so
+    the migration runs every boot and a duplicate-column error must be the expected no-op."""
+    path = str(tmp_path / "old.db")
+    import sqlite3
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TABLE calendar_event (session_id TEXT NOT NULL, calendar_id TEXT NOT NULL,
+                        event_id TEXT NOT NULL, updated_at TEXT NOT NULL,
+                        PRIMARY KEY (session_id, calendar_id))""")
+        conn.execute("INSERT INTO calendar_event VALUES ('S1','cal','e1','2026-01-01')")
+    old = Store(url=None, path=path)                             # _init runs the migration
+    assert old.owned_on("cal") == {"S1": ("e1", None)}
+    old.remember_events("cal", [("S2", "e2", "h2")])
+    assert old.owned_on("cal")["S2"] == ("e2", "h2")
+    Store(url=None, path=path)                                   # booting twice must not raise
+
+
+def test_the_literal_data_route_is_declared_before_the_parameterised_one():
+    """FastAPI matches routes in declaration order, so /api/data/{name} declared first swallowed
+    /api/data/reset and answered 'unknown dataset `reset`'."""
+    from engine import dotenv as _dotenv
+    real, _dotenv.load = _dotenv.load, lambda path: 0
+    os.environ["DATABASE_URL"] = ""
+    os.environ.setdefault("IK_DB_PATH", "/tmp/ik-route-test.db")
+    try:
+        from api import index
+    finally:
+        _dotenv.load = real
+    paths = [r.path for r in index.app.routes if "/api/data" in getattr(r, "path", "")]
+    assert paths.index("/api/data/reset") < paths.index("/api/data/{name}")
+
+
+def test_only_datasets_the_page_boots_from_are_writable():
+    """Accepting `courses` would store something the dashboard then ignores — a silent no-op."""
+    from api import index
+    assert set(index.DATASETS) == {"sessions_next", "sessions_current", "smes", "smes_current",
+                                   "history", "batches"}
+    for structural in ("courses", "weeks", "meta"):
+        assert structural not in index.DATASETS

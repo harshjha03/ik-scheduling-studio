@@ -26,6 +26,11 @@ from engine.run import apply_approvals, run_pipeline  # noqa: E402
 from engine.store import store  # noqa: E402
 
 app = FastAPI(title="SME Scheduler API")
+# What the dashboard boots from. A stored row wins over the bundled data/<name>.json.
+# `courses`, `weeks` and `meta` are deliberately absent: they are structural (the calendar grid, the
+# week labels, the course->topic map) and no flow in the app produces a new one, so accepting a write
+# for them would store something the page then ignores.
+DATASETS = ("sessions_next", "sessions_current", "smes", "smes_current", "history", "batches")
 _last_run: dict | None = None  # warm-instance cache only; the frontend is the source of truth
 
 
@@ -51,7 +56,28 @@ def draft():
 def approvals(body: dict = Body(...)):
     if not isinstance(body.get("draft"), list):
         raise HTTPException(422, "`draft` must be a list of draft rows")
-    return apply_approvals(body["draft"], body.get("decisions") or [])
+    out = apply_approvals(body["draft"], body.get("decisions") or [])
+    # apply_approvals is a pure function in the engine and stays that way: it returns what it did, and
+    # the route that owns a database is the one that writes it down.
+    if body.get("week") and out["override_log"]:
+        store().record_overrides(body["week"], out["override_log"], actor=body.get("actor") or "human")
+    return out
+
+
+@app.get("/api/overrides")
+def overrides(week: str | None = None, limit: int = 100):
+    """Every override, and the rate per week. An override is a labelled disagreement with the matcher,
+    so the rate over time is the trust metric — it is the one number worth watching go down."""
+    st = store()
+    counts = st.override_counts()
+    rates = {}
+    for w, n in counts.items():
+        saved = st.load_schedule(w) or {}
+        assigned = ((saved.get("stats") or {}).get("assigned")
+                    or sum(1 for r in (saved.get("draft") or []) if r.get("sme_id")))
+        rates[w] = {"overridden": n, "assigned": assigned,
+                    "rate": round(n / assigned, 4) if assigned else None}
+    return {"entries": st.overrides(week, limit), "by_week": rates}
 
 
 @app.get("/api/health")
@@ -191,6 +217,40 @@ def put_schedule(body: dict = Body(...)):
     return {"saved": body["week"], "rows": len(body["draft"]), "storage": store().info()}
 
 
+@app.get("/api/data")
+def data():
+    """The bundle the app boots from: the stored row for each dataset where one exists, the bundled
+    seed JSON where it does not, each tagged with where it came from. One place decides."""
+    stored = store().load_datasets()
+    out = {}
+    for name in DATASETS:
+        if name in stored:
+            row = stored[name]
+            out[name] = {"payload": row["payload"], "source": row["source"], "updated_at": row["updated_at"]}
+        else:
+            out[name] = {"payload": ingest.seed(name), "source": "seed", "updated_at": None}
+    return {"datasets": out}
+
+
+@app.post("/api/data/reset")
+def reset_data():
+    """Back to the bundled seed week. Demo safety, and the honest way to undo a bad import."""
+    return {"cleared": store().reset_datasets()}
+
+
+@app.post("/api/data/{name}")
+def put_data(name: str, body: dict = Body(...)):
+    """Persist what a CSV upload or a Sheets pull produced — called from the confirm step, so nothing
+    is stored until the coordinator has seen the check."""
+    if name not in DATASETS:
+        raise HTTPException(422, f"unknown dataset `{name}`; one of {', '.join(DATASETS)}")
+    payload = body.get("payload")
+    if not isinstance(payload, (list, dict)) or not payload:
+        raise HTTPException(422, "`payload` must be a non-empty list or object")
+    store().save_dataset(name, payload, body.get("source") or "csv")
+    return {"saved": name, "source": body.get("source") or "csv", "rows": len(payload)}
+
+
 def store_now() -> str:
     from engine.store import now
     return now()
@@ -267,6 +327,8 @@ def agent_apply(body: dict = Body(...)):
     actor = body.get("actor") or "agent"
     log = [{**e, "actor": actor, "reason": next((m.get("reason") for m in plan if m.get("session_id") == e["session_id"]), None)}
            for e in out["override_log"]]
+    if log:
+        store().record_overrides(body.get("week") or "", log, actor=actor)
     return {"draft": rows, "flags": flags,
             "stats": {"total_sessions": len(rows), "assigned": sum(1 for r in rows if r["sme_id"]),
                       "unfilled": sum(1 for r in rows if not r["sme_id"]),
