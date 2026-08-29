@@ -379,7 +379,7 @@ def run_agent(ctx: dict, mode: str, sme_id: str | None = None, days: list[str] |
     called: set[str] = set()
     affected = T.get_affected_rows(ctx, sme_id, days)["rows"] if mode == "recovery" and sme_id else []
     goal = _goal(mode, ctx, sme_id, days, question)
-    if turns:
+    if turns and mode == "chat":      # QA-09: review and recovery are single shots whatever the caller sends
         goal = ("Conversation so far:\n"
                 + "\n".join(f"{'Coordinator' if t.get('role') == 'user' else 'You'}: {str(t.get('content') or '')[:TURN_CHARS]}"
                              for t in turns[-CHAT_HISTORY:])

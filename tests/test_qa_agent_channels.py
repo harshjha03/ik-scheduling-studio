@@ -186,10 +186,8 @@ def test_report_unavailable_binds_for_the_rest_of_the_run(ctx):
 def test_modes_carry_state_only_where_they_should(ctx):
     """Chat is multi-turn; recovery and review are single shots.
 
-    FINDING (QA-09): the loop replays `turns` for *any* mode, so review would carry a conversation if a
-    caller passed one. Harmless today because the frontend only sends turns for chat and the API does
-    not synthesise them, but the mode contract is not actually enforced. Asserting current behaviour so
-    the report and the suite agree.
+    QA-09 (fixed): the loop used to replay `turns` for *any* mode, so review would carry a conversation
+    if a caller passed one. The conversation block is now gated on chat mode.
     """
     prompts = []
 
@@ -208,7 +206,8 @@ def test_modes_carry_state_only_where_they_should(ctx):
     prompts.clear()
     A.run_agent(ctx, "review", question="one-off", turns=[{"role": "user", "content": "earlier question"}],
                 llm_call=spy)
-    assert "earlier question" in prompts[-1], "QA-09: turns are replayed even in review mode"
+    assert "earlier question" not in prompts[-1], "QA-09: review ignores turns a caller passes"
+    assert "Conversation so far" not in prompts[-1]
 
 
 def test_without_a_key_the_copilot_labels_itself_fallback(ctx, monkeypatch):
