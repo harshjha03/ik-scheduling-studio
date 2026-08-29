@@ -1,7 +1,11 @@
 "use client";
 import type { CSSProperties } from "react";
 import type { Course, DraftRow, Meta, SessionType } from "@/lib/types";
-import { accentBorder, hhmm, istParts, topFlag, FLAG_LABEL, SEV_CHIP } from "@/lib/view";
+import { accentBorder, hhmm, isLive, istParts, topFlag, FLAG_LABEL, SEV_CHIP } from "@/lib/view";
+
+/** The batch a merged-away class joined, so the card says where its learners went. */
+const mergedHost = (r: DraftRow, rows: DraftRow[]) =>
+  rows.find((x) => x.session_id === r.merged_into)?.batch_id ?? r.merged_into;
 
 const ROW_H = 84;      // tallest an hour row is allowed to get
 const MIN_ROW = 40;    // shortest, on a very short viewport
@@ -173,7 +177,9 @@ export default function WeekCalendar({
 
                 const r = it.row!;
                 const flag = topFlag(r);
-                const unfilled = !r.sme_id;
+                // a class that is not running needs no teacher, so it must never read as unfilled
+                const drop = !isLive(r);
+                const unfilled = !r.sme_id && !drop;
                 const isApproved = approved.has(r.session_id);
                 const medium = !!flag && (flag.severity === "medium" || flag.severity === "high");
                 const okApproved = isApproved && !unfilled && !flag;
@@ -185,11 +191,13 @@ export default function WeekCalendar({
                     title={`${r.batch_id} · ${r.sub_specialty ?? meta.type_label[r.type]} · ${hhmm(it.hour)} IST · ${r.sme_name ?? "unfilled"}`}
                     style={{
                       ...base,
-                      background: unfilled ? "var(--red-tint)" : medium ? "#fdf9ef" : okApproved ? "#f4faf6" : "#fff",
+                      background: drop ? "var(--page)" : unfilled ? "var(--red-tint)" : medium ? "#fdf9ef" : okApproved ? "#f4faf6" : "#fff",
+                      opacity: drop ? 0.72 : 1,
                       ...accentBorder(
-                        unfilled ? "1px solid var(--red-line)" : medium ? "1px solid var(--amber-line)"
-                          : okApproved ? "1px solid var(--green-line)" : "1px solid #ece9f5",
-                        `3px solid ${unfilled ? "var(--red)" : okApproved ? "var(--green)" : course?.accent ?? "var(--brand)"}`,
+                        drop ? "1px dashed var(--line)"
+                          : unfilled ? "1px solid var(--red-line)" : medium ? "1px solid var(--amber-line)"
+                            : okApproved ? "1px solid var(--green-line)" : "1px solid #ece9f5",
+                        `3px solid ${drop ? "var(--muted-2)" : unfilled ? "var(--red)" : okApproved ? "var(--green)" : course?.accent ?? "var(--brand)"}`,
                       ),
                       boxShadow: unfilled ? "0 2px 10px rgba(192,57,43,0.16)" : base.boxShadow,
                     }}
@@ -213,15 +221,16 @@ export default function WeekCalendar({
                         <span title="changed since last run" className="size-[7px] shrink-0 rounded-full" style={{ background: "var(--amber)" }} />
                       )}
                     </span>
-                    <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px] font-semibold leading-[1.15]">
+                    <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px] font-semibold leading-[1.15]"
+                      style={drop ? { textDecoration: "line-through", color: "var(--muted)" } : undefined}>
                       {r.sub_specialty ?? meta.type_label[r.type]}
                     </span>
                     {showSme && (
                       <span
                         className="cal-sme block overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px] leading-[1.3]"
-                        style={unfilled ? { color: "var(--red-ink)", fontWeight: 650 } : { color: "var(--ink-3)" }}
+                        style={drop ? { color: "var(--muted)" } : unfilled ? { color: "var(--red-ink)", fontWeight: 650 } : { color: "var(--ink-3)" }}
                       >
-                        {r.sme_name ?? "Unfilled — needs a teacher"}
+                        {r.cancelled ? "Cancelled" : r.merged_into ? `Merged into ${mergedHost(r, rows)}` : r.sme_name ?? "Unfilled — needs a teacher"}
                       </span>
                     )}
                   </button>

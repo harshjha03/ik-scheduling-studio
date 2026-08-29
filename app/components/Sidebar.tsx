@@ -7,12 +7,13 @@ export const MODULES: Record<ModuleKey, { label: string; sub: string }> = {
   dashboard: { label: "Dashboard", sub: "The week at a glance — batch calendars, conflicts and work items" },
   smes: { label: "SME management", sub: "Skills, level, availability, history and ratings in one place" },
   batches: { label: "Batch management", sub: "Course progress, running topics and weekly calendars per batch" },
+  history: { label: "Past weeks", sub: "What actually ran, and how the four-week workload landed" },
   myweek: { label: "My teaching week", sub: "Your classes, availability and preferences" },
   mysched: { label: "My schedule", sub: "Your batch's classes and instructors" },
 };
 
 export const ROLE_MODULES: Record<Role, ModuleKey[]> = {
-  coordinator: ["dashboard", "smes", "batches"],
+  coordinator: ["dashboard", "smes", "batches", "history"],
   sme: ["myweek"],
   student: ["mysched"],
 };
@@ -22,6 +23,7 @@ export const ICONS: Record<ModuleKey, string> = {
   dashboard: "M4 4.8h6.4v5.4H4zM13.6 4.8H20v3.4h-6.4zM13.6 11.2H20v8h-6.4zM4 13.2h6.4v6H4z",
   smes: "M9.2 11.4a3.3 3.3 0 100-6.6 3.3 3.3 0 000 6.6zM3.2 19.6c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16.6 11.3a2.7 2.7 0 000-5.4M17.2 14.5c2.4.5 3.9 2.3 3.9 5.1",
   batches: "M12 3.2l8.2 4.3-8.2 4.3-8.2-4.3zM3.8 12.2l8.2 4.3 8.2-4.3M3.8 16.6l8.2 4.3 8.2-4.3",
+  history: "M12 7.4v5l3.2 1.9M3.6 12a8.4 8.4 0 108.4-8.4 8.4 8.4 0 00-6 2.5M3.4 4.2v3.9h3.9",
   myweek: "M8 3v3.2M16 3v3.2M3.4 9.6h17.2M4.4 6.2h15.2v14.4H4.4zM8 13h3v3H8z",
   mysched: "M8 3v3.2M16 3v3.2M3.4 9.6h17.2M4.4 6.2h15.2v14.4H4.4zM8 13h3v3H8z",
 };

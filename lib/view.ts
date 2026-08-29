@@ -41,7 +41,20 @@ export const FLAG_LABEL: Record<FlagCode, string> = {
   FAIRNESS_VIOLATION: "FAIRNESS",
   TIE_ESCALATED: "TIE",
   LLM_FALLBACK: "FALLBACK",
+  CLASS_CANCELLED: "CANCELLED",
+  CLASS_MERGED: "MERGED",
 };
+
+/** Mirrors `is_live` in engine/stages.py: a cancelled class and one folded into another both keep
+ *  their row, but neither needs a teacher — so neither counts as unfilled, and neither blocks a
+ *  publish. Every count and every work item filters through here. */
+export const isLive = (r: { cancelled?: unknown; merged_into?: unknown }) => !r.cancelled && !r.merged_into;
+export const liveRows = <T extends { cancelled?: unknown; merged_into?: unknown }>(rows: T[]) => rows.filter(isLive);
+
+/** The rolling window Stage B scores fairness on. Kept in step with PAST_WEEKS_FOR_LOAD and
+ *  FAIRNESS_BAND in engine/stages.py by tests/test_invariants.py — if you change one, change both. */
+export const PAST_WEEKS_FOR_LOAD = 3;
+export const FAIRNESS_BAND = 2;
 
 export const SEV_CHIP: Record<Severity, string> = {
   critical: "chip-critical",
@@ -59,6 +72,7 @@ export function topFlag(row: DraftRow): Flag | null {
 
 /** Visual bucket used by the calendar and the status filter. */
 export function category(row: DraftRow, approved: boolean): Category {
+  if (!isLive(row)) return "dropped";
   if (!row.sme_id || row.flags.some((f) => f.code === "HARD_CONFLICT")) return "red";
   if (row.flags.some((f) => f.severity === "high" || f.severity === "medium")) return "amber";
   if (approved) return "approved";
@@ -70,6 +84,7 @@ export const CATEGORIES: { key: Category; label: string; hint: string; dot: stri
   { key: "amber", label: "Workload / tie-break", hint: "Outside the fairness band, or an LLM broke a near-tie", dot: "#d18b3c" },
   { key: "approved", label: "Approved", hint: "Signed off and ready to publish", dot: "#0f7a52" },
   { key: "staffed", label: "Staffed · no flags", hint: "Teacher assigned and inside every rule", dot: "var(--brand)" },
+  { key: "dropped", label: "Cancelled / merged", hint: "Not running — no teacher needed, does not block publishing", dot: "var(--muted-2)" },
 ];
 
 /**
@@ -177,7 +192,9 @@ export function sheetCandidates(row: DraftRow, smes: SME[]): SheetCandidate[] {
 
 // ---- work items ----
 
-export function workItems(rows: DraftRow[], smes: SME[], dismissed: Set<string>, leave: Record<string, string>): WorkItem[] {
+export function workItems(
+  rows: DraftRow[], smes: SME[], dismissed: Set<string>, leave: Record<string, string>, weekLabel = "next week",
+): WorkItem[] {
   const out: WorkItem[] = [];
   const whenOf = (r: DraftRow) => { const p = istParts(r.start_utc); return `${DAY_ORDER[p.day]} ${p.label}`; };
   const add = (r: DraftRow, code: FlagCode, severity: Severity, title: string) => {
@@ -186,17 +203,19 @@ export function workItems(rows: DraftRow[], smes: SME[], dismissed: Set<string>,
     out.push({ key: `${r.session_id}:${code}`, code, severity, title, detail: flag.reason,
       session_id: r.session_id, blocking: severity === "critical", when: whenOf(r) });
   };
-  rows.forEach((r) => add(r, "UNFILLED", "critical", `${r.batch_id} · ${r.sub_specialty ?? r.type} has no teacher`));
-  rows.forEach((r) => add(r, "HARD_CONFLICT", "critical", `${r.batch_id} · double booking`));
-  rows.forEach((r) => add(r, "RULE_OVERRIDE_RISK", "high", `${r.batch_id} · override breaks a rule`));
-  rows.forEach((r) => add(r, "FAIRNESS_VIOLATION", "medium", `${r.batch_id} · workload out of band`));
+  // a cancelled or merged class needs nobody: raising it here would block the publish for ever
+  const open = liveRows(rows);
+  open.forEach((r) => add(r, "UNFILLED", "critical", `${r.batch_id} · ${r.sub_specialty ?? r.type} has no teacher`));
+  open.forEach((r) => add(r, "HARD_CONFLICT", "critical", `${r.batch_id} · double booking`));
+  open.forEach((r) => add(r, "RULE_OVERRIDE_RISK", "high", `${r.batch_id} · override breaks a rule`));
+  open.forEach((r) => add(r, "FAIRNESS_VIOLATION", "medium", `${r.batch_id} · workload out of band`));
   Object.entries(leave).forEach(([smeId, text]) => {
     const s = smes.find((x) => x.id === smeId);
     if (!s || dismissed.has(`leave:${smeId}`)) return;
-    const clash = rows.filter((r) => r.sme_id === smeId);
+    const clash = open.filter((r) => r.sme_id === smeId);
     out.push({
-      key: `leave:${smeId}`, code: "LEAVE", severity: "medium", sme_id: smeId, blocking: false, when: "this week",
-      title: `${s.name} is on leave next week`,
+      key: `leave:${smeId}`, code: "LEAVE", severity: "medium", sme_id: smeId, blocking: false, when: weekLabel,
+      title: `${s.name} is out ${weekLabel}`,
       detail: `${text}. ${clash.length
         ? `${clash.length} class(es) are still assigned to them — reassign or move.`
         : "No classes are assigned to them, nothing to do."}`,
@@ -304,7 +323,7 @@ export function fitsFor(sme: SME, rows: DraftRow[]): DraftRow[] {
   const ref = rows[0]?.start_utc;
   if (!ref) return [];
   const busy = new Set(rows.filter((r) => r.sme_id === sme.id).map((r) => { const p = istParts(r.start_utc); return `${p.day}-${p.hour}`; }));
-  return rows.filter((r) => !r.sme_id)
+  return liveRows(rows).filter((r) => !r.sme_id)
     .filter((r) => sme.subjects.includes(r.subject))
     .filter((r) => !r.sub_specialty || sme.topics.includes(r.sub_specialty))
     .filter((r) => sme.training_level >= r.required_training_level)
@@ -327,7 +346,8 @@ export function smeMatches(sme: SME, rows: DraftRow[], query: string, filter: Sm
 
 export function kpis(rows: DraftRow[], smes: SME[], batches: Batch[], approved: Set<string>) {
   const assigned = rows.filter((r) => r.sme_id);
-  const unfilled = rows.length - assigned.length;
+  const live = liveRows(rows);
+  const unfilled = live.length - assigned.length;
   const conflicts = rows.filter((r) => r.flags.some((f) => f.code === "HARD_CONFLICT")).length;
   const workload = rows.filter((r) => r.flags.some((f) => f.code === "FAIRNESS_VIOLATION")).length;
   return {
@@ -343,6 +363,7 @@ export function kpis(rows: DraftRow[], smes: SME[], batches: Batch[], approved: 
       mock: rows.filter((r) => r.type === "mock").length,
     },
     unfilled,
+    dropped: rows.length - live.length,
     conflicts,
     workload,
     attention: unfilled + conflicts + workload,
@@ -354,8 +375,103 @@ export function kpis(rows: DraftRow[], smes: SME[], batches: Batch[], approved: 
 
 export function smeWeekStats(sme: SME, rows: DraftRow[]) {
   const assigned = rows.filter((r) => r.sme_id === sme.id).length;
-  const load4w = sme.history.slice(-3).reduce((a, w) => a + w.sessions_taught, 0) + assigned;
+  const load4w = sme.history.slice(-PAST_WEEKS_FOR_LOAD).reduce((a, w) => a + w.sessions_taught, 0) + assigned;
   return { assigned, load4w, over: assigned > sme.preferred };
+}
+
+// ---- rolling-window workload ----
+
+export interface WorkloadRow {
+  sme: SME;
+  /** the three history weeks Stage B scores on, then this week's draft */
+  byWeek: { week: string; sessions: number; draft?: boolean }[];
+  total: number;
+  poolMean: number;
+  delta: number;
+  inBand: boolean;
+  subject: string;
+}
+
+/**
+ * Every teacher's four-week load exactly as Stage B computes it: `past_load` over the last three
+ * history weeks plus this draft. The engine's FAIRNESS_VIOLATION reasons quote these same numbers,
+ * so anything else here would put two different answers on one screen.
+ *
+ * The pool mean is per subject, because that is the pool fairness is normalised against — a teacher
+ * is only ever heavy or light relative to the people who could have taken their classes.
+ */
+export function workload(smes: SME[], history: HistoryRecord[], rows: DraftRow[]): WorkloadRow[] {
+  const draftCount = new Map<string, number>();
+  rows.forEach((r) => { if (r.sme_id) draftCount.set(r.sme_id, (draftCount.get(r.sme_id) ?? 0) + 1); });
+  const weeksOf = (id: string) => {
+    const recs = history.filter((h) => h.sme_id === id);
+    const source = recs.length ? recs : (smes.find((s) => s.id === id)?.history ?? []).map((h) => ({ ...h, sme_id: id }));
+    return [...source].sort((a, b) => a.week.localeCompare(b.week)).slice(-PAST_WEEKS_FOR_LOAD);
+  };
+  const total = new Map<string, number>();
+  smes.forEach((s) => total.set(s.id,
+    weeksOf(s.id).reduce((a, w) => a + w.sessions_taught, 0) + (draftCount.get(s.id) ?? 0)));
+  // one mean per subject pool; a teacher of two subjects is judged against their first, the way the
+  // SME table already labels them
+  const meanOf = new Map<string, number>();
+  new Set(smes.flatMap((s) => s.subjects)).forEach((subject) => {
+    const pool = smes.filter((s) => s.subjects.includes(subject));
+    meanOf.set(subject, pool.length ? pool.reduce((a, s) => a + (total.get(s.id) ?? 0), 0) / pool.length : 0);
+  });
+  return smes.map((s) => {
+    const t = total.get(s.id) ?? 0;
+    const subject = s.subjects[0];
+    const mean = meanOf.get(subject) ?? 0;
+    return {
+      sme: s, subject, total: t, poolMean: mean, delta: t - mean,
+      inBand: Math.abs(t - mean) <= FAIRNESS_BAND,
+      byWeek: [...weeksOf(s.id).map((w) => ({ week: w.week, sessions: w.sessions_taught })),
+               { week: "draft", sessions: draftCount.get(s.id) ?? 0, draft: true }],
+    };
+  }).sort((a, b) => b.total - a.total || a.sme.id.localeCompare(b.sme.id));
+}
+
+// ---- merge a class into another batch's ----
+
+export interface MergeHost {
+  row: DraftRow;
+  sameHour: boolean;
+  learners: number;
+  levelAfter: number;
+  /** nobody on the host either — merging would just move the problem */
+  hostUnstaffed: boolean;
+}
+
+/**
+ * Classes this one could be folded into for a single hour: same course, same topic, another batch.
+ * A host at a different hour is still offered — a reschedule can align them — but it costs learners
+ * a moved class, so it sorts last.
+ *
+ * ponytail: this deliberately duplicates find_merge_candidates in engine/tools.py. The engine needs
+ * its own copy for the copilot (it runs server-side against a ctx the page never sends), and a
+ * round-trip just to populate a picker the page already has every row for is not worth the latency.
+ * The two must agree on the rules; tests/test_invariants.py pins the learner cap.
+ */
+export const MERGE_LEARNER_CAP = 80;
+
+export function mergeCandidates(row: DraftRow, rows: DraftRow[], batches: Batch[]): MergeHost[] {
+  if (!isLive(row)) return [];
+  const learnersOf = (id: string) => batches.find((b) => b.id === id)?.learners ?? 0;
+  return liveRows(rows)
+    .filter((h) => h.session_id !== row.session_id && h.batch_id !== row.batch_id)
+    .filter((h) => h.subject === row.subject && (h.sub_specialty ?? "") === (row.sub_specialty ?? ""))
+    .map((h) => {
+      const ids = new Set([row.batch_id, h.batch_id, ...(row.merged_batches ?? []), ...(h.merged_batches ?? [])]);
+      return {
+        row: h, sameHour: h.start_utc === row.start_utc, hostUnstaffed: !h.sme_id,
+        learners: [...ids].reduce((a, b) => a + learnersOf(b), 0),
+        levelAfter: Math.max(h.required_training_level, row.required_training_level),
+      };
+    })
+    .filter((h) => h.learners <= MERGE_LEARNER_CAP)
+    .sort((a, b) => Number(b.sameHour) - Number(a.sameHour)
+      || Number(a.hostUnstaffed) - Number(b.hostUnstaffed)
+      || a.learners - b.learners);
 }
 
 // ---- new batch ----

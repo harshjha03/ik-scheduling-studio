@@ -21,6 +21,10 @@ interface Props {
   statusOff: Record<string, boolean>;
   workCount: number;
   published: boolean;
+  /** the live week has been changed since it was published — only `changedCount` rows are stale */
+  amended?: boolean;
+  changedCount?: number;
+  onRepublish?: () => void;
   overrides: OverrideEvent[];
   loading: boolean;
   vh: number;
@@ -37,7 +41,7 @@ interface Props {
 
 export default function Dashboard({
   rows, allRows, batches, courses, meta, weeks, week, weekDates, tab, approved, changed, batchFilter, statusOff,
-  workCount, published, overrides, loading, vh, smeName, onTab, onBatchFilter, onStatusToggle,
+  workCount, published, amended, changedCount = 0, onRepublish, overrides, loading, vh, smeName, onTab, onBatchFilter, onStatusToggle,
   onOpenWork, onAskCopilot, onApproveWeek, onOpen, onOpenOverride,
 }: Props) {
   const locked = weeks[week].locked;
@@ -84,6 +88,15 @@ export default function Dashboard({
               {workCount}
             </span>
           </button>
+          {locked && amended && (
+            <button
+              className="btn btn-go"
+              onClick={onRepublish}
+              title={`Re-sends only the ${changedCount} class(es) that changed — the rest of the week is untouched.`}
+            >
+              Re-publish {changedCount} change{changedCount === 1 ? "" : "s"}
+            </button>
+          )}
           {!locked && !published && (
             <button
               className="btn btn-go"

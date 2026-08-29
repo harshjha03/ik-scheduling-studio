@@ -319,7 +319,10 @@
   "sme_id": "T06",
   "week": "2026-W32",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "DSA-01",
+   "DSA-02"
+  ],
   "per_topic_rating": {
    "Dynamic Programming": 4.1,
    "Arrays & Strings": 4.0,
@@ -332,7 +335,10 @@
   "sme_id": "T06",
   "week": "2026-W33",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "DSA-01",
+   "DSA-02"
+  ],
   "per_topic_rating": {
    "Dynamic Programming": 4.1,
    "Arrays & Strings": 4.0,
@@ -345,7 +351,10 @@
   "sme_id": "T06",
   "week": "2026-W34",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "DSA-01",
+   "DSA-02"
+  ],
   "per_topic_rating": {
    "Dynamic Programming": 4.1,
    "Arrays & Strings": 4.0,
@@ -358,7 +367,10 @@
   "sme_id": "T06",
   "week": "2026-W35",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "DSA-01",
+   "DSA-02"
+  ],
   "per_topic_rating": {
    "Dynamic Programming": 4.1,
    "Arrays & Strings": 4.0,
@@ -615,7 +627,10 @@
   "sme_id": "T11",
   "week": "2026-W32",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "AI-01",
+   "AI-02"
+  ],
   "per_topic_rating": {
    "RAG & Retrieval": 4.5,
    "Prompt & Eval Systems": 4.5,
@@ -628,7 +643,10 @@
   "sme_id": "T11",
   "week": "2026-W33",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "AI-01",
+   "AI-02"
+  ],
   "per_topic_rating": {
    "RAG & Retrieval": 4.5,
    "Prompt & Eval Systems": 4.5,
@@ -641,7 +659,10 @@
   "sme_id": "T11",
   "week": "2026-W34",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "AI-01",
+   "AI-02"
+  ],
   "per_topic_rating": {
    "RAG & Retrieval": 4.5,
    "Prompt & Eval Systems": 4.5,
@@ -654,7 +675,10 @@
   "sme_id": "T11",
   "week": "2026-W35",
   "sessions_taught": 4,
-  "batches": [],
+  "batches": [
+   "AI-01",
+   "AI-02"
+  ],
   "per_topic_rating": {
    "RAG & Retrieval": 4.5,
    "Prompt & Eval Systems": 4.5,

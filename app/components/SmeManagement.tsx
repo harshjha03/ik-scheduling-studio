@@ -1,7 +1,8 @@
 "use client";
+import { useState } from "react";
 import type { Course, DraftRow, Meta, SME, WeekKey, WeekMeta } from "@/lib/types";
-import type { SmeFilter } from "@/lib/view";
-import { accentBorder, avatarBg, fitsFor, initials, istParts, isAvailable, smeMatches, smeWeekStats } from "@/lib/view";
+import type { SmeFilter, WorkloadRow } from "@/lib/view";
+import { FAIRNESS_BAND, accentBorder, avatarBg, fitsFor, initials, istParts, isAvailable, smeMatches, smeWeekStats } from "@/lib/view";
 import WeekCalendar, { type GhostRow } from "./WeekCalendar";
 
 interface Props {
@@ -32,6 +33,8 @@ interface Props {
   /** read each teacher's calendar for the week and re-draft against what is already booked */
   onSyncAvailability: () => void;
   syncBusy?: boolean;
+  /** every teacher's four-week rolling load, exactly as Stage B scores it */
+  workload: WorkloadRow[];
   /** busy blocks found per SME on the last sync, and whether that sync was live */
   busyBlocks?: Record<string, number>;
   syncDetail?: string;
@@ -47,8 +50,9 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 export default function SmeManagement({
   smes, rows, courses, meta, weeks, week, weekDates, approved, selected, leave, query, filter, vh,
   onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onReportOut, unavailable, onToggleUnavailable, onImportSmes,
-  onSyncAvailability, syncBusy, busyBlocks, syncDetail, syncLive,
+  onSyncAvailability, syncBusy, workload, busyBlocks, syncDetail, syncLive,
 }: Props) {
+  const [showLoad, setShowLoad] = useState(true);
   const shown = smes.filter((s) => smeMatches(s, rows, query, filter, leave));
   const sel = smes.find((s) => s.id === selected) ?? shown[0] ?? smes[0];
   const selRows = rows.filter((r) => r.sme_id === sel.id);
@@ -259,6 +263,9 @@ export default function SmeManagement({
         </div>
       </section>
 
+      <WorkloadCard rows={workload} query={query} filter={filter} smeRows={rows} leave={leave}
+        open={showLoad} onToggle={() => setShowLoad((v) => !v)} selected={sel.id} onSelect={onSelect} />
+
       <section className="card flex min-h-[186px] flex-1 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-3 p-[13px_20px_11px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
           <div>
@@ -292,5 +299,94 @@ export default function SmeManagement({
         />
       </section>
     </div>
+  );
+}
+
+
+/**
+ * The rolling window fairness is actually scored on: three history weeks plus this draft, against
+ * the mean of that teacher's subject pool.
+ *
+ * A FAIRNESS_VIOLATION on a class says "26 sessions over 4 weeks, 9.9 above the DSA pool mean" and
+ * there was nowhere in the app to see where that came from — so the band was a number a coordinator
+ * had to take on trust. These are the same figures, per teacher, with the band drawn on.
+ */
+function WorkloadCard({ rows, query, filter, smeRows, leave, open, onToggle, selected, onSelect }: {
+  rows: WorkloadRow[]; query: string; filter: SmeFilter; smeRows: DraftRow[]; leave: Record<string, string>;
+  open: boolean; onToggle: () => void; selected: string; onSelect: (id: string) => void;
+}) {
+  const shown = rows.filter((w) => smeMatches(w.sme, smeRows, query, filter, leave));
+  const peak = Math.max(1, ...rows.map((w) => Math.max(...w.byWeek.map((b) => b.sessions))));
+  const out = shown.filter((w) => !w.inBand);
+  return (
+    <section className="card shrink-0">
+      <button className="flex w-full items-center gap-[9px] p-[12px_20px_11px] text-left"
+        onClick={onToggle} style={{ borderBottom: open ? "1px solid var(--line-2)" : undefined }}>
+        <span className="text-[13px] font-bold">Workload over the last 4 weeks</span>
+        <span className="text-[11.5px]" style={{ color: "var(--muted-2)" }}>
+          The window the scheduler scores fairness on — three past weeks plus this one, against the pool mean ± {FAIRNESS_BAND}
+        </span>
+        <span className="ml-auto flex items-center gap-[9px]">
+          {!!out.length && (
+            <span className="chip chip-medium">{out.length} outside the band</span>
+          )}
+          <span className="text-[11.5px] font-semibold" style={{ color: "var(--brand-deep)" }}>{open ? "Hide" : "Show"}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="max-h-[210px] overflow-auto p-[6px_14px_12px]">
+          <div role="list">
+              {shown.map((w) => {
+                const tone = w.inBand ? null : w.delta > 0 ? "over" : "under";
+                return (
+                  <div role="listitem" key={w.sme.id} onClick={() => onSelect(w.sme.id)}
+                    className="flex items-center gap-[8px] rounded-[8px]"
+                    style={{ cursor: "pointer", background: w.sme.id === selected ? "var(--brand-tint)" : undefined }}>
+                    <span className="shrink-0 p-[5px_8px] text-[12.5px] font-semibold" style={{ width: 168 }}>
+                      <span className="block overflow-hidden text-ellipsis whitespace-nowrap">{w.sme.name}</span>
+                      <span className="block text-[10.5px] font-normal" style={{ color: "var(--muted)" }}>{w.subject} pool</span>
+                    </span>
+                    <span className="min-w-0 flex-1 p-[5px_8px]">
+                      <span className="flex items-end gap-[4px]" style={{ height: 30 }}>
+                        {w.byWeek.map((b, i) => (
+                          <span key={i} title={`${b.draft ? "this week" : b.week}: ${b.sessions}`}
+                            className="flex-1 rounded-t-[3px]"
+                            style={{
+                              height: `${Math.max(3, (b.sessions / peak) * 30)}px`,
+                              background: b.draft ? "var(--brand)" : "var(--brand-tint)",
+                              border: b.draft ? undefined : "1px solid var(--line)",
+                              opacity: b.draft ? 1 : 0.9,
+                            }} />
+                        ))}
+                      </span>
+                    </span>
+                    <span className="shrink-0 p-[5px_8px] text-right text-[12.5px] font-bold" style={{ width: 44 }}>{w.total}</span>
+                    <span className="shrink-0 p-[5px_8px] text-[11px]" style={{ width: 190, color: "var(--muted)" }}>
+                      pool mean {w.poolMean.toFixed(1)}
+                      {" · "}
+                      <span style={{
+                        color: tone === "over" ? "var(--red-ink)" : tone === "under" ? "var(--amber-ink)" : "var(--green-ink)",
+                        fontWeight: 650,
+                      }}>
+                        {tone === null ? "inside the band"
+                          : `${Math.abs(w.delta).toFixed(1)} ${w.delta > 0 ? "above" : "below"}`}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+              {!shown.length && (
+                <div className="p-4 text-center text-[12.5px]" style={{ color: "var(--muted)" }}>
+                  Nobody matches that search or filter.
+                </div>
+              )}
+          </div>
+          <div className="mt-[7px] text-[11px] leading-[1.5]" style={{ color: "var(--muted)" }}>
+            The solid bar is the week on screen; the outlined bars are the three history weeks behind it. A teacher
+            below the mean is not underused by choice — it is the gap the next draft tries to close.
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

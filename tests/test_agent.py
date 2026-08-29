@@ -19,6 +19,7 @@ _dotenv.load = _real_load
 from engine import agent as A  # noqa: E402
 from engine import tools as T  # noqa: E402
 from engine.run import run_pipeline  # noqa: E402
+from engine.stages import MERGE_LEARNER_CAP as S_MERGE_CAP  # noqa: E402
 from tests.test_engine import FULL, session, sme, weeks  # noqa: E402
 
 # Wed 2026-09-09 10:00 IST = 04:30Z. Three DSA teachers:
@@ -432,7 +433,9 @@ def test_review_mode_answers_and_llm_outage_falls_back_to_engine_text():
 
 def test_system_prompt_is_the_spec_text_verbatim():
     assert A.SYSTEM.startswith("You are the scheduling copilot for IK Scheduling Studio.")
-    assert "8. Budget: you have at most 8 tool calls." in A.SYSTEM
+    assert "9. Budget: you have at most 8 tool calls." in A.SYSTEM
+    # cancelling is the bottom of the ladder, and the prompt has to say so before the code enforces it
+    assert "Cancelling a class is the last resort" in A.SYSTEM
 
 
 # ---------------- reschedule and upgrade ----------------
@@ -848,3 +851,112 @@ def test_apply_refuses_a_stale_plan():
     with pytest.raises(HTTPException) as e:
         api.agent_apply(body)
     assert e.value.status_code == 409
+
+
+# ---------------- merge and cancel ----------------
+
+def _merge_ctx():
+    """Two DSA-graphs classes at the same hour in different batches — the pair a merge exists for.
+    The drop-out X holds one of them; W (level 2, free) can teach the merged class."""
+    twin = session("W37-DSA-03-1", batch="DSA-03", subject="DSA", ss="graphs", typ="class",
+                   start="2026-09-09T04:30:00Z", level=1)
+    smes = [_sme("T14", "Xavier", "graphs", 2), _sme("Y", "Yamini", "graphs", 2), _sme("Z", "Zed", None, 1),
+            _sme("W", "Wen", "graphs", 2), {**sme("M", subject="ML", ss="nlp"), "name": "Mira"}]
+    res = run_pipeline([CLASS, twin, Y_DOUBT, X_DOUBT, OTHER], smes, [], [], llm_enabled=False)
+    for r in res["draft"]:
+        r["flags"] = []
+    # pin the whole layout: Stage B ties would otherwise hand W two classes at the same hour
+    want = {CLASS["id"]: ("T14", "Xavier"), twin["id"]: ("W", "Wen"), Y_DOUBT["id"]: ("Y", "Yamini"),
+            X_DOUBT["id"]: ("Z", "Zed"), OTHER["id"]: ("M", "Mira")}
+    for r in res["draft"]:
+        sid, name = want[r["session_id"]]
+        r.update(sme_id=sid, sme_name=name, stage="override")
+    batches = [{"id": "DSA-01", "learners": 30}, {"id": "DSA-02", "learners": 30},
+               {"id": "DSA-03", "learners": 30}, {"id": "ML-01", "learners": 20}]
+    return T.make_ctx("2026-W37", res["draft"], smes, [], {"sme_id": "T14", "days": ["wed"]}, batches), twin
+
+
+def test_find_merge_candidates_offers_the_same_topic_at_the_same_hour():
+    ctx, twin = _merge_ctx()
+    out = T.find_merge_candidates(ctx, CLASS["id"])
+    hosts = {h["session_id"]: h for h in out["hosts"]}
+    assert twin["id"] in hosts                      # same subject, same topic, same hour
+    assert Y_DOUBT["id"] not in hosts               # same hour, but a doubt session is not this topic
+    assert OTHER["id"] not in hosts                 # different subject entirely
+    h = hosts[twin["id"]]
+    assert h["same_hour"] and h["combined_learners"] == 60
+    assert h["required_training_level_after"] == 2  # the host was level 1; the merged class is not
+    assert h["has_teacher"]
+
+
+def test_a_merge_needs_the_same_topic_and_the_same_hour():
+    ctx, twin = _merge_ctx()
+    ok = T.simulate_plan(ctx, [{"kind": "merge", "session_id": CLASS["id"],
+                                "into_session_id": twin["id"], "reason": "cover"}])
+    assert ok["verdicts"][0]["verdict"] == "ok"
+    assert "60 learners in one class" in ok["verdicts"][0]["detail"]
+    assert ok["merged_after"] == [CLASS["id"]] and CLASS["id"] not in ok["unfilled_after"]
+
+    # a doubt session at the same hour is a different topic, and must be refused
+    bad = T.simulate_plan(ctx, [{"kind": "merge", "session_id": CLASS["id"],
+                                 "into_session_id": Y_DOUBT["id"], "reason": "cover"}])
+    assert bad["verdicts"][0]["verdict"] == "breaks:different_topic"
+
+    # a host at another hour is refused, and the message names the fix
+    other_hour = T.simulate_plan(ctx, [{"kind": "merge", "session_id": CLASS["id"],
+                                        "into_session_id": X_DOUBT["id"], "reason": "cover"}])
+    assert other_hour["verdicts"][0]["verdict"].startswith("breaks:")
+
+
+def test_a_merge_over_the_learner_cap_is_refused():
+    ctx, twin = _merge_ctx()
+    ctx = {**ctx, "batches": [{"id": "DSA-01", "learners": 60}, {"id": "DSA-03", "learners": 40}]}
+    out = T.simulate_plan(ctx, [{"kind": "merge", "session_id": CLASS["id"],
+                                 "into_session_id": twin["id"], "reason": "cover"}])
+    assert out["verdicts"][0]["verdict"] == "breaks:too_many_learners"
+    assert str(S_MERGE_CAP) in out["verdicts"][0]["detail"]
+
+
+def test_a_cancel_needs_a_reason_and_warns_when_cover_still_exists():
+    ctx, _ = _merge_ctx()
+    with pytest.raises(T.ToolError) as e:
+        T.simulate_plan(ctx, [{"kind": "cancel", "session_id": CLASS["id"], "reason": "  "}])
+    assert "learners are told why" in str(e.value)
+
+    # The doubt session at 07:30 has free teachers, so cancelling it is not the answer — but ops may
+    # have a reason the engine cannot see, so it is a warning and not a refusal.
+    warn = T.simulate_plan(ctx, [{"kind": "cancel", "session_id": X_DOUBT["id"], "reason": "Nobody free"}])
+    assert warn["verdicts"][0]["verdict"] == "cover_warning"
+    # it names the teacher who is still on the class, not a stranger who could also take it
+    assert warn["verdicts"][0]["detail"].startswith("Zed is still assigned")
+
+    # The class at 04:30 genuinely has nobody left: every other graphs teacher is busy that hour.
+    out = T.simulate_plan(ctx, [{"kind": "cancel", "session_id": CLASS["id"], "reason": "Nobody free"}])
+    assert out["verdicts"][0]["verdict"] == "ok" and "learner(s) are told" in out["verdicts"][0]["detail"]
+    assert out["cancelled_after"] == [CLASS["id"]] and CLASS["id"] not in out["unfilled_after"]
+
+
+def test_the_copilot_may_not_cancel_a_class_it_never_proved_was_beyond_rescue():
+    """The guard that matters most: a cancel the model reached for without walking the ladder is
+    dropped, whatever the prompt said."""
+    ctx, _ = _merge_ctx()
+    out = A.run_agent(ctx, "recovery", sme_id="T14", days=["wed"], llm_call=scripted(
+        final("Cancel it.", [{"kind": "cancel", "session_id": CLASS["id"], "reason": "no cover"}])))
+    assert out["plan"] is None
+    assert "not shown to be beyond rescue" in out["answer"]
+    assert "no eligible teacher" in out["answer"]
+
+
+def test_the_copilot_may_only_merge_into_a_host_it_actually_checked():
+    ctx, twin = _merge_ctx()
+    blind = A.run_agent(ctx, "recovery", sme_id="T14", days=["wed"], llm_call=scripted(
+        final("Merge them.", [{"kind": "merge", "session_id": CLASS["id"],
+                               "into_session_id": twin["id"], "reason": "one room"}])))
+    assert blind["plan"] is None and "never returned by find_merge_candidates" in blind["answer"]
+
+    checked = A.run_agent(ctx, "recovery", sme_id="T14", days=["wed"], llm_call=scripted(
+        act("find_merge_candidates", session_id=CLASS["id"]),
+        final("Merge them.", [{"kind": "merge", "session_id": CLASS["id"],
+                               "into_session_id": twin["id"], "reason": "one room"}])))
+    assert checked["plan"] and checked["plan"][0]["kind"] == "merge"
+    assert checked["plan"][0]["verdict"] == "ok"

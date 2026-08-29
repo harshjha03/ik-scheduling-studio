@@ -129,25 +129,45 @@ def _span(row: dict) -> tuple[datetime, datetime]:
     return start, start + timedelta(minutes=int(row.get("duration_min", 60)))
 
 
+def dropped(row: dict) -> str | None:
+    """"cancelled" | "merged" | None — a class that is not running still has to be announced, and the
+    two read differently to a learner: one is off, the other has moved rooms."""
+    if row.get("cancelled"):
+        return "cancelled"
+    return "merged" if row.get("merged_into") else None
+
+
 def title_of(row: dict) -> str:
     topic = row.get("sub_specialty") or row.get("type", "class").title()
-    return f"{row['batch_id']} · {topic}"
+    kind = dropped(row)
+    prefix = "CANCELLED — " if kind == "cancelled" else "MOVED — " if kind == "merged" else ""
+    return f"{prefix}{row['batch_id']} · {topic}"
 
 
 def event_body(row: dict, sme_email: str | None = None) -> dict:
     """A Google Calendar event for one class. Deterministic, so re-publishing is a clean update."""
     start, end = _span(row)
     teacher = row.get("sme_name") or "To be confirmed"
+    kind = dropped(row)
     lines = [
         f"Batch: {row['batch_id']}",
         f"Course: {row.get('subject', '')}",
         f"Topic: {row.get('sub_specialty') or row.get('type')}",
         f"Teacher: {teacher}",
     ]
+    if kind == "cancelled":
+        why = (row["cancelled"] or {}).get("reason") if isinstance(row.get("cancelled"), dict) else None
+        lines = [f"This class is CANCELLED.", f"Reason: {why or 'not given'}", f"Batch: {row['batch_id']}"]
+    elif kind == "merged":
+        lines = [f"This class now runs with another batch ({row['merged_into']}).",
+                 "You will be sent the joint session — nothing else changes.", f"Batch: {row['batch_id']}"]
     if row.get("flags"):
         lines.append("Flags: " + ", ".join(f["code"] for f in row["flags"]))
     body: dict = {
         "summary": title_of(row),
+        # a cancelled event stays on the calendar as cancelled: silently deleting it means the class
+        # simply vanishes from a learner's week with no explanation of why
+        **({"status": "cancelled"} if kind == "cancelled" else {}),
         "description": "\n".join(lines),
         "start": {"dateTime": start.astimezone(IST).isoformat(), "timeZone": "Asia/Kolkata"},
         "end": {"dateTime": end.astimezone(IST).isoformat(), "timeZone": "Asia/Kolkata"},
@@ -162,25 +182,41 @@ def event_body(row: dict, sme_email: str | None = None) -> dict:
 def digest_html(week_label: str, rows: list[dict], for_teacher: str | None = None) -> str:
     """One readable digest of the published week; scoped to a teacher when given."""
     mine = sorted([r for r in rows if not for_teacher or r.get("sme_id") == for_teacher], key=lambda r: r["start_utc"])
-    items = []
+    items, off = [], 0
     for r in mine:
         start, _ = _span(r)
         local = start.astimezone(IST).strftime("%a %d %b, %H:%M")
+        kind = dropped(r)
+        if kind:
+            off += 1
+            why = (r.get("cancelled") or {}).get("reason") if kind == "cancelled" else None
+            note = f" — {why}" if why else (f" — now runs with {r['merged_into']}" if kind == "merged" else "")
+            items.append(f"<li><b>{local} IST</b> — <s>{title_of(r)}</s>{note}</li>")
+            continue
         who = "" if for_teacher else f" · {r.get('sme_name') or 'unfilled'}"
         items.append(f"<li><b>{local} IST</b> — {title_of(r)}{who}</li>")
+    running = len(mine) - off
     return (f"<p>Here is the schedule for <b>{week_label}</b>.</p>"
             f"<ul>{''.join(items)}</ul>"
-            f"<p>{len(mine)} class(es). Reply to this mail if anything looks wrong.</p>")
+            f"<p>{running} class(es)"
+            + (f", {off} no longer running" if off else "")
+            + ". Reply to this mail if anything looks wrong.</p>")
 
 
 def sms_text(week_label: str, rows: list[dict], for_teacher: str | None = None) -> str:
     mine = sorted([r for r in rows if not for_teacher or r.get("sme_id") == for_teacher], key=lambda r: r["start_utc"])
     if not mine:
         return f"{week_label}: nothing scheduled for you."
-    first = mine[0]
+    off = [r for r in mine if dropped(r)]
+    running = [r for r in mine if not dropped(r)]
+    if not running and off:
+        start, _ = _span(off[0])
+        return (f"{week_label}: {title_of(off[0])} on {start.astimezone(IST):%a %H:%M} IST is not running.")
+    first = running[0]
     start, _ = _span(first)
-    return (f"{week_label}: {len(mine)} class(es). Next: {title_of(first)} "
-            f"on {start.astimezone(IST):%a %H:%M} IST.")
+    return (f"{week_label}: {len(running)} class(es)"
+            + (f" ({len(off)} cancelled or moved)" if off else "")
+            + f". Next: {title_of(first)} on {start.astimezone(IST):%a %H:%M} IST.")
 
 
 # ---------------------------------------------------------------- configuration

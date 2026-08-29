@@ -9,17 +9,23 @@ import batchesJson from "@/data/batches.json";
 import coursesJson from "@/data/courses.json";
 import weeksJson from "@/data/weeks.json";
 import metaJson from "@/data/meta.json";
+import pastWeeksJson from "@/data/past_weeks.json";
+import sessionsW32Json from "@/data/sessions_w32.json";
+import sessionsW33Json from "@/data/sessions_w33.json";
+import sessionsW34Json from "@/data/sessions_w34.json";
+import sessionsW35Json from "@/data/sessions_w35.json";
 import type {
   AgentMove, AgentMoveAction, AgentRequest, AgentResult, ChatTurn, DataProvenance,
   Batch, Category, Course, Decision, DraftRow, Fix, HistoryRecord, LeafId, Meta, ModuleKey, NewClass, OverrideEvent,
-  Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME, WeekKey, WeekMeta, WorkItem,
+  Cancellation, PastWeek, Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME,
+  WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
 import {
   agentApply, agentRun, getData, getIntegrations, getOverrides, loadSchedule, publishLeaf, pullSheet,
   pushSheet, putData, resetData, runMatching, saveSchedule, submitApprovals, syncAvailability,
   type IntegrationsInfo, type OverrideStats,
 } from "@/lib/api";
-import { isMove, isReschedule, isUpgrade } from "@/lib/types";
+import { isCancel, isMerge, isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { csvExporter } from "@/lib/export";
 import {
   classTemplate, downloadCsv, emptyImport, historyTemplate, isWorkbook, parseClassImport,
@@ -27,14 +33,16 @@ import {
   WORKBOOK_HINT, type ImportedClass, type ImportedHistory, type ImportedSme, type ImportResult,
 } from "@/lib/import";
 import {
-  FLAG_LABEL, SEV_CHIP, applyAvailabilityBlocks, autoFix, isAvailable, istParts, nextBatchId, newBatchSessions,
-  publishLeaves, sendSummary, sheetCandidates, weekAsHistory, workItems, type SmeFilter,
+  FLAG_LABEL, SEV_CHIP, applyAvailabilityBlocks, autoFix, isAvailable, isLive, istParts, liveRows, mergeCandidates,
+  nextBatchId, newBatchSessions, publishLeaves, sendSummary, sheetCandidates, weekAsHistory, workItems, workload,
+  type SmeFilter,
 } from "@/lib/view";
 import Sidebar, { MODULES, PERSONA, ROLE_MODULES } from "./components/Sidebar";
 import KpiCards from "./components/KpiCards";
 import Dashboard from "./components/Dashboard";
 import SmeManagement from "./components/SmeManagement";
 import BatchManagement from "./components/BatchManagement";
+import PastWeeks from "./components/PastWeeks";
 import MyWeek from "./components/MyWeek";
 import Sheet, { PersonRow, SectionLabel } from "./components/Sheet";
 import WorkSheet from "./components/WorkSheet";
@@ -58,6 +66,14 @@ const BATCHES0 = batchesJson as unknown as Batch[];
 const COURSES = coursesJson as unknown as Record<string, Course>;
 const WEEKS = weeksJson as unknown as Record<WeekKey, WeekMeta>;
 const META = metaJson as unknown as Meta;
+const PAST_WEEKS = pastWeeksJson as unknown as PastWeek[];
+/** Settled weeks: the rows carry the teacher who actually took the class, so they need no pipeline. */
+const PAST_SESSIONS: Record<string, Session[]> = {
+  "2026-W32": sessionsW32Json as unknown as Session[],
+  "2026-W33": sessionsW33Json as unknown as Session[],
+  "2026-W34": sessionsW34Json as unknown as Session[],
+  "2026-W35": sessionsW35Json as unknown as Session[],
+};
 
 const flagKey = (r: DraftRow) => r.flags.map((f) => f.code).sort().join("|");
 /** The three ingestable datasets, in the order the header names them. */
@@ -133,6 +149,15 @@ export default function Page() {
   const [chatBusy, setChatBusy] = useState(false);
   // session_id -> new start_utc, from a copilot reschedule the coordinator applied
   const [sessionEdits, setSessionEdits] = useState<Record<string, string>>({});
+  // Classes ops (or the copilot) has dropped. Both are edit layers over the fixtures, exactly like
+  // `sessionEdits`, so they survive every re-draft instead of being wiped by the next run.
+  const [sessionCancels, setSessionCancels] = useState<Record<string, Cancellation>>({});
+  const [sessionMerges, setSessionMerges] = useState<Record<string, string>>({});
+  const [cancelReason, setCancelReason] = useState("");
+  // A published week that has since been amended: the calendars people hold are stale for the rows
+  // in `changed`, and only those need re-sending.
+  const [amended, setAmended] = useState<Partial<Record<WeekKey, boolean>>>({});
+  const [pastWeek, setPastWeek] = useState<string>(PAST_WEEKS.at(-1)?.iso ?? "");
   // what is actually wired up right now, so every control can label itself live or simulated
   const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null);
   const [sheetBusy, setSheetBusy] = useState(false);
@@ -236,27 +261,46 @@ export default function Page() {
 
   /** Seeded sessions plus anything ops added, with copilot reschedules folded in. A reschedule only
    *  changes when a class runs, so it is an edit layer over the fixtures — not a new session. */
-  const sessionsFor = useCallback((w: WeekKey, edits: Record<string, string> = sessionEdits): Session[] => {
+  const sessionsFor = useCallback((
+    w: WeekKey,
+    edits: Record<string, string> = sessionEdits,
+    cancels: Record<string, Cancellation> = sessionCancels,
+    merges: Record<string, string> = sessionMerges,
+  ): Session[] => {
     const list = w === "next" ? [...sessionData.next, ...extraSessions] : sessionData.current;
-    return list.map((x) => (edits[x.id] ? { ...x, start_utc: edits[x.id] } : x));
-  }, [extraSessions, sessionEdits]);
+    return list.map((x) => ({
+      ...x,
+      ...(edits[x.id] ? { start_utc: edits[x.id] } : {}),
+      ...(cancels[x.id] ? { cancelled: cancels[x.id] } : {}),
+      ...(merges[x.id] ? { merged_into: merges[x.id] } : {}),
+    }));
+  }, [sessionData, extraSessions, sessionEdits, sessionCancels, sessionMerges]);
 
-  /** Draft the next week on top of the settled current week. */
-  const runNext = useCallback(async (opts: {
+  /** Re-run one week's pipeline.
+   *
+   *  `next` is drafted on top of the settled current week, as it always was. `current` is re-run in
+   *  place: it is published and approved, so it is never re-drafted wholesale — but a last-minute
+   *  drop-out has to be able to move classes inside it, and running the same Stages A-D over the
+   *  amended sessions is a stronger check than patching rows by hand. Deterministic (no LLM) there,
+   *  because a settled week is not a place to introduce a new tie-break.
+   */
+  const runWeek = useCallback(async (target: WeekKey, opts: {
     overrides?: OverrideEvent[]; sessions?: Session[]; smes?: SME[];
     availOff?: Record<string, boolean>; quiet?: boolean;
   } = {}) => {
     const cur = runs.current;
-    if (!cur) return;
+    if (target === "next" && !cur) return;
     setLoading(true);
     try {
       const blocks = opts.availOff ?? availOff;
-      const roster = opts.smes ?? rosterFor("next");
+      const roster = opts.smes ?? rosterFor(target);
       const smes = roster.map((s) => (s.id === META.me ? applyAvailabilityBlocks(s, blocks) : s));   // the SME's own blocks
-      const history = weekAsHistory(cur.draft, roster, WEEKS.current.iso, historyRecords);
-      const sessions = opts.sessions ?? sessionsFor("next");
-      const res = await runMatching(sessions, smes, history, opts.overrides ?? overrides, { llm: true });
-      const prev = nextRef.current;
+      const history = target === "next" && cur
+        ? weekAsHistory(cur.draft, roster, WEEKS.current.iso, historyRecords)
+        : historyRecords;
+      const sessions = opts.sessions ?? sessionsFor(target);
+      const res = await runMatching(sessions, smes, history, opts.overrides ?? overrides, { llm: target === "next" });
+      const prev = target === "next" ? nextRef.current : runs.current?.draft ?? null;
       const changedIds = new Set<string>();
       if (prev) {
         const before = new Map(prev.map((r) => [r.session_id, r]));
@@ -265,18 +309,29 @@ export default function Page() {
           if (!p || p.sme_id !== r.sme_id || flagKey(p) !== flagKey(r)) changedIds.add(r.session_id);
         });
       }
-      nextRef.current = res.draft;
+      if (target === "next") nextRef.current = res.draft;
       setChanged(changedIds);
-      setRuns((s) => ({ ...s, next: res }));
+      setRuns((s) => ({ ...s, [target]: res }));
+      const iso = WEEKS[target].iso;
       // durable copy, so a refresh does not lose the coordinator's work
-      persist(save(WEEKS.next.iso, res.draft, {
-        stats: res.stats, flags: res.flags, published: false, provenance, history: historyRecords,
+      persist(save(iso, res.draft, {
+        stats: res.stats, flags: res.flags, published: target === "next" ? false : !!published[target],
+        provenance, history: historyRecords,
       }));
-      setApproved((a) => new Set([...a].filter((id) => !res.draft.some((r) => r.session_id === id))));
-      setPublished((p) => ({ ...p, next: false }));   // a re-draft invalidates what people were sent
-      setDecisions({});
-      setResolvedLog([]);
-      setOverrides((log) => log.map((o) => (o.week === "next" ? {
+      // A re-draft invalidates the sign-off it was given. On the live week only the rows that
+      // actually moved lose theirs — the rest of the week is still the week ops approved.
+      setApproved((a) => new Set([...a].filter((id) => (target === "next"
+        ? !res.draft.some((r) => r.session_id === id)
+        : !changedIds.has(id) && res.draft.some((r) => r.session_id === id && isLive(r))))));
+      if (target === "next") {
+        setPublished((p) => ({ ...p, next: false }));   // a re-draft invalidates what people were sent
+        setDecisions({});
+        setResolvedLog([]);
+      } else if (published.current && changedIds.size) {
+        // the live week stays published — only the rows that moved need re-sending
+        setAmended((a) => ({ ...a, current: true }));
+      }
+      setOverrides((log) => log.map((o) => (o.week === target ? {
         ...o,
         changed_rows: res.draft
           .filter((r) => changedIds.has(r.session_id) && r.batch_id === o.batch_id)
@@ -291,7 +346,9 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, historyRecords, say, persist]);
+  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, historyRecords, published, provenance, say, persist, save]);
+
+  const runNext = useCallback((opts: Parameters<typeof runWeek>[1] = {}) => runWeek("next", opts), [runWeek]);
 
   // initial load: settle the current week (no LLM), then draft the next on top of it
   useEffect(() => {
@@ -361,8 +418,13 @@ export default function Page() {
     () => (batchFilter === "all" ? rows : rows.filter((r) => r.batch_id === batchFilter)),
     [rows, batchFilter],
   );
+  // The rolling window the engine actually scores on, so the SME table and the FAIRNESS_VIOLATION
+  // reasons on the calendar are quoting one set of numbers rather than two.
+  const workloadRows = useMemo(() => workload(smesFor(week), historyRecords, rows), [smesFor, week, historyRecords, rows]);
+  // Leave applies to whichever week is on screen: ops can now mark a teacher out of the live week,
+  // and a drop-out that raises no work item is a drop-out nobody acts on.
   const work = useMemo(
-    () => workItems(rows, smes, dismissed, week === "next" ? leave : {}),
+    () => workItems(rows, smes, dismissed, leave, WEEKS[week].locked ? "this week" : "next week"),
     [rows, smes, dismissed, leave, week],
   );
   /** one proposal per item, computed once so the list and its buttons never disagree */
@@ -404,7 +466,11 @@ export default function Page() {
   };
 
   const assign = (row: DraftRow, smeId: string, name: string, blocked: boolean, quiet = false) => {
-    if (WEEKS[week].locked) {
+    // On the live week a routine teacher swap still goes to the SME for approval. Covering a
+    // drop-out does not: there is nobody left on the class to approve it, and the whole point of a
+    // last-minute change is that it lands before the class does.
+    const recovery = !row.sme_id || unavailable[row.sme_id];
+    if (WEEKS[week].locked && !recovery) {
       setPending((p) => [...p.filter((x) => x.session_id !== row.session_id),
         { session_id: row.session_id, sme_id: smeId, name, from_sme_id: row.sme_id }]);
       setOverrides((log) => [{
@@ -447,13 +513,19 @@ export default function Page() {
         : x.flags.filter((f) => f.code !== "UNFILLED" && f.code !== "HARD_CONFLICT" && f.code !== "FAIRNESS_VIOLATION"),
     }));
     setApproved((a) => { const n = new Set(a); n.delete(row.session_id); return n; });
+    setChanged((c) => new Set(c).add(row.session_id));
     setSheet(null);
-    // editing a published week un-publishes it: the calendars people already have are now stale
+    // Editing a published week makes the calendars people already have stale. On a draft that
+    // un-publishes the whole week; on the live week only this class moved, so the week stays
+    // published and is marked amended — re-publishing then sends just the rows that changed.
     const wasPublished = !!published[week];
-    if (wasPublished) setPublished((p) => ({ ...p, [week]: false }));
+    if (wasPublished && !WEEKS[week].locked) setPublished((p) => ({ ...p, [week]: false }));
+    else if (wasPublished) setAmended((a) => ({ ...a, [week]: true }));
     if (!quiet) {
       say(wasPublished
-        ? `${name} assigned — the week needs re-publishing so calendars stay in sync.`
+        ? (WEEKS[week].locked
+          ? `${name} assigned — re-publish the change so calendars stay in sync.`
+          : `${name} assigned — the week needs re-publishing so calendars stay in sync.`)
         : `${name} assigned to ${row.batch_id}.`);
     }
   };
@@ -503,20 +575,72 @@ export default function Page() {
     say("Reverted.");
   };
 
-  /** Ops takes a teacher out of next week (or brings them back). Deterministic: Stage A rules them out
-   *  and the week re-drafts — the copilot is for finding cover, not for recording the fact. */
+  /** Ops takes a teacher out of the week on screen (or brings them back). Deterministic: Stage A
+   *  rules them out and the week re-runs — the copilot is for finding cover, not for recording the
+   *  fact. This works on the live week too: a teacher dropping out tomorrow is the whole point, and
+   *  waiting for next week's draft to notice is not an answer. */
   const toggleUnavailable = async (smeId: string) => {
-    const who = rosterFor("next").find((x) => x.id === smeId);
+    const who = rosterFor(week).find((x) => x.id === smeId);
     if (!who) return;
     const off = !unavailable[smeId];
     const next = { ...unavailable, [smeId]: off };
-    const had = (runs.next?.draft ?? []).filter((r) => r.sme_id === smeId).length;
+    const had = (runs[week]?.draft ?? []).filter((r) => r.sme_id === smeId).length;
     setUnavailable(next);
     setLeave((l) => { const n = { ...l }; if (off) n[smeId] = "Marked unavailable by ops"; else delete n[smeId]; return n; });
-    await runNext({ smes: rosterFor("next", next), quiet: true });
+    const res = await runWeek(week, { smes: rosterFor(week, next), quiet: true });
+    const stranded = (res?.draft ?? []).filter((r) => isLive(r) && !r.sme_id).length;
+    const when = WEEKS[week].locked ? "this week" : "next week";
     say(off
-      ? `${who.name} marked unavailable next week — ${had} class(es) re-drafted; anything without cover is in Work items.`
-      : `${who.name} is available again — next week re-drafted.`);
+      ? `${who.name} marked unavailable ${when} — ${had} class(es) re-run; ${stranded
+        ? `${stranded} still need cover — merge, reschedule or cancel them from the class.`
+        : "everything found cover."}`
+      : `${who.name} is available again — ${when} re-run.`);
+  };
+
+  // ---------- last-minute drop-outs: merge or cancel a single class ----------
+
+  /** Fold this class into another batch's class for the hour. Both cohorts sit the surviving class,
+   *  which is re-staffed for the higher of the two required levels by the ordinary pipeline. */
+  const mergeClass = async (row: DraftRow, host: DraftRow) => {
+    const merges = { ...sessionMerges, [row.session_id]: host.session_id };
+    setSessionMerges(merges);
+    setOverrides((log) => [{
+      kind: "teacher change", session_id: row.session_id, batch_id: row.batch_id, week,
+      from_sme_id: row.sme_id, to_sme_id: "", to_sme_name: host.batch_id, at: new Date().toISOString(),
+      actor: "ops", note: `${row.batch_id} merged into ${host.batch_id} for this class — one room, both cohorts.`,
+    }, ...log]);
+    setSheet(null);
+    await runWeek(week, { sessions: sessionsFor(week, sessionEdits, sessionCancels, merges), quiet: true });
+    say(`${row.batch_id} merged into ${host.batch_id} for ${row.sub_specialty ?? META.type_label[row.type]}.`);
+  };
+
+  /** The bottom of the ladder. A reason is required — it is what the learners are told. */
+  const cancelClass = async (row: DraftRow, reason: string) => {
+    const cancels = { ...sessionCancels, [row.session_id]: { reason, by: "Ops", at: new Date().toISOString() } };
+    setSessionCancels(cancels);
+    setOverrides((log) => [{
+      kind: "teacher change", session_id: row.session_id, batch_id: row.batch_id, week,
+      from_sme_id: row.sme_id, to_sme_id: "", to_sme_name: "cancelled", at: new Date().toISOString(),
+      actor: "ops", note: `Class cancelled — ${reason}`,
+    }, ...log]);
+    setSheet(null);
+    setCancelReason("");
+    await runWeek(week, { sessions: sessionsFor(week, sessionEdits, cancels, sessionMerges), quiet: true });
+    say(`${row.batch_id} · ${row.sub_specialty ?? META.type_label[row.type]} cancelled — ${
+      published[week] ? "re-publish to tell the learners." : "learners are told when the week is published."}`);
+  };
+
+  /** Put a dropped class back — undoes either a cancel or a merge. */
+  const restoreClass = async (row: DraftRow) => {
+    const cancels = { ...sessionCancels };
+    const merges = { ...sessionMerges };
+    delete cancels[row.session_id];
+    delete merges[row.session_id];
+    setSessionCancels(cancels);
+    setSessionMerges(merges);
+    setSheet(null);
+    await runWeek(week, { sessions: sessionsFor(week, sessionEdits, cancels, merges), quiet: true });
+    say(`${row.batch_id} · ${row.sub_specialty ?? META.type_label[row.type]} is back on the schedule.`);
   };
 
   // ---------- publish ----------
@@ -529,7 +653,14 @@ export default function Page() {
     setSheet({ kind: "publish" });
   };
 
-  const leaves = useMemo(() => publishLeaves(rows, batches), [rows, batches]);
+  /** What this publish actually sends: the whole week normally, or just the rows that moved when the
+   *  live week is being amended. Cancelled and merged classes travel with it — a class that is not
+   *  running is the one thing people most need told. */
+  const pubRows = useMemo(
+    () => (amended[week] && changed.size ? rows.filter((r) => changed.has(r.session_id)) : rows),
+    [amended, week, changed, rows],
+  );
+  const leaves = useMemo(() => publishLeaves(pubRows, batches), [pubRows, batches]);
 
   /** Publish for real, one leaf at a time: the API sends where it has credentials and reports
    *  `simulated` where it does not — either way the outcome is recorded server-side. */
@@ -546,7 +677,7 @@ export default function Page() {
       try {
         const res = await publishLeaf({
           week: WEEKS[week].iso, week_label: WEEKS[week].label, channel: l.channel.key, audience: l.audience.key,
-          rows, smes: rosterFor("next"), batches,
+          rows: pubRows, smes: rosterFor(week), batches,
         });
         if (pubToken.current !== token) return false;   // cancelled mid-flight, per callback
         setPubStatus((s) => ({ ...s, [l.id]: res.status as SendState }));   // sent | simulated | skipped | error
@@ -565,13 +696,25 @@ export default function Page() {
     }
     // reduced after the fact rather than written from several callbacks
     const anyLive = outcomes.some(Boolean);
-    setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
-    setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
+    const amending = !!amended[week];
+    setApproved((a) => new Set([...a, ...pubRows.map((r) => r.session_id)]));
+    setDecisions((d) => ({ ...d, ...Object.fromEntries(pubRows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
     setPublished((p) => ({ ...p, [week]: true }));
+    if (amending) { setAmended((a) => ({ ...a, [week]: false })); setChanged(new Set()); }
     persist(save(WEEKS[week].iso, rows, { published: true, stats: run?.stats, flags: run?.flags }));
+    const what = amending ? `${pubRows.length} change${pubRows.length === 1 ? "" : "s"} sent` : "Week published";
     say(anyLive
-      ? `Week published — ${sendSummary(list)}.`
-      : `Week marked published — ${sendSummary(list)} simulated (no channel credentials yet).`);
+      ? `${what} — ${sendSummary(list)}.`
+      : `${what} — ${sendSummary(list)} simulated (no channel credentials yet).`);
+  };
+
+  /** Re-send only what moved. The live week stays published; a drop-out touched a handful of classes
+   *  and re-announcing the other forty is how people learn to ignore the announcements. */
+  const republishChanges = () => {
+    if (!changed.size) { say("Nothing has changed since the week was published."); return; }
+    setPubStatus({});
+    setPubSel(ALL_LEAVES);
+    setSheet({ kind: "publish" });
   };
 
   const cancelPublish = () => {
@@ -935,18 +1078,24 @@ export default function Page() {
   const openAgent = (req: AgentRequest) => {
     setAgentReq(req);
     setAgentRes(null);
-    setWeek("next");
     setSheet({ kind: "agent" });
   };
 
+  /** The history the copilot scores fairness against: for next week, the settled current week counts
+   *  as its most recent past week; for the live week it is the record as imported. */
+  const agentHistory = useCallback((w: WeekKey) => (
+    w === "next" && runs.current
+      ? weekAsHistory(runs.current.draft, rosterFor(w), WEEKS.current.iso, historyRecords)
+      : historyRecords
+  ), [runs.current, rosterFor, historyRecords]);
+
   const runAgent = async () => {
-    const nxt = runs.next;
-    if (!nxt || !runs.current) return;
+    const target = runs[week];
+    if (!target) return;
     setAgentBusy(true);
     try {
-      const roster = rosterFor("next");
-      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, historyRecords);
-      setAgentRes(await agentRun(WEEKS.next.iso, agentReq, nxt.draft, roster, history));
+      const roster = rosterFor(week);
+      setAgentRes(await agentRun(WEEKS[week].iso, agentReq, target.draft, roster, agentHistory(week), undefined, batches));
     } catch (e) {
       say(String(e).slice(0, 160));
     } finally {
@@ -957,27 +1106,32 @@ export default function Page() {
   /** Every move goes through the engine's override path server-side (actor `agent`), Stage D re-validates,
    *  and the result replaces the draft — exactly what a manual override does, logged as the Copilot. */
   const applyPlan = async (plan: AgentMoveAction[], draft?: DraftRow[]): Promise<boolean> => {
-    const nxt = runs.next;
-    if (!nxt || !runs.current || !plan.length) return false;
-    const base = draft ?? nxt.draft;
+    const target = runs[week];
+    if (!target || !plan.length) return false;
+    const base = draft ?? target.draft;
+    const iso = WEEKS[week].iso;
     try {
-      const roster = rosterFor("next");
-      const history = weekAsHistory(runs.current.draft, roster, WEEKS.current.iso, historyRecords);
-      const out = await agentApply(WEEKS.next.iso, plan, base, roster, history);
+      const roster = rosterFor(week);
+      const out = await agentApply(iso, plan, base, roster, agentHistory(week));
       const at = new Date().toISOString();
-      nextRef.current = out.draft;
-      setRuns((s) => ({ ...s, next: { draft: out.draft, flags: out.flags, stats: { ...nxt.stats, ...out.stats } as RunResult["stats"] } }));
+      if (week === "next") nextRef.current = out.draft;
+      setRuns((s) => ({ ...s, [week]: { draft: out.draft, flags: out.flags, stats: { ...target.stats, ...out.stats } as RunResult["stats"] } }));
       setChanged(new Set(out.applied));
       setOverrides((log) => [...out.override_log.map((e): OverrideEvent => ({
-        kind: e.from_sme_id ? "teacher change" : "assigned", session_id: e.session_id, batch_id: e.batch_id, week: "next",
+        kind: e.from_sme_id ? "teacher change" : "assigned", session_id: e.session_id, batch_id: e.batch_id, week,
         from_sme_id: e.from_sme_id, to_sme_id: e.to_sme_id, to_sme_name: e.to_sme_name, at, actor: "Copilot",
         note: `${e.reason ?? "Copilot plan"} — applied via the override path and re-validated by Stage D.`,
       })), ...log]);
       setApproved((a) => new Set([...a].filter((id) => !out.applied.includes(id))));
       setDecisions((d) => ({ ...d, ...Object.fromEntries(out.override_log.map((e) => [e.session_id,
         { session_id: e.session_id, action: "override" as const, override_sme_id: e.to_sme_id }])) }));
-      if (published.next) setPublished((p) => ({ ...p, next: false }));
-      persist(save(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }));
+      // a draft un-publishes wholesale; the live week keeps its publish and is marked amended
+      if (published[week]) {
+        if (WEEKS[week].locked) setAmended((a) => ({ ...a, [week]: true }));
+        else setPublished((p) => ({ ...p, [week]: false }));
+      }
+      persist(save(iso, out.draft, { stats: out.stats, flags: out.flags,
+        published: WEEKS[week].locked ? !!published[week] : false }));
       getOverrides().then(setOverrideStats).catch(() => {});
       return true;
     } catch (e) {
@@ -986,24 +1140,32 @@ export default function Page() {
     }
   };
 
-  /** Reschedules and upgrades change the source data, so they are applied here and the whole pipeline
-   *  re-runs over them — Stage A–D from scratch, which is a stronger check than validating in place.
+  /** Everything except a staffing move changes the source data — when a class runs, whether it runs
+   *  at all, whose cohort sits in it, a teacher's level — so those are applied here and the whole
+   *  pipeline re-runs over them: Stage A–D from scratch, a stronger check than validating in place.
    *  Staffing moves then go through the override route against that fresh draft. */
   const applyActions = async (plan: AgentMove[]): Promise<boolean> => {
     const moves = plan.filter(isMove);
     const reschedules = plan.filter(isReschedule);
     const upgrades = plan.filter(isUpgrade);
+    const merges = plan.filter(isMerge);
+    const cancels = plan.filter(isCancel);
     const at = new Date().toISOString();
-    let draftRows = runs.next?.draft ?? [];
+    let draftRows = runs[week]?.draft ?? [];
 
-    if (reschedules.length || upgrades.length) {
+    if (reschedules.length || upgrades.length || merges.length || cancels.length) {
       const edits = { ...sessionEdits, ...Object.fromEntries(reschedules.map((r) => [r.session_id, r.start_utc])) };
+      const drops = { ...sessionCancels, ...Object.fromEntries(cancels.map((c) => [c.session_id,
+        { reason: c.reason || "Cancelled by the copilot", by: "Copilot", at }])) };
+      const folds = { ...sessionMerges, ...Object.fromEntries(merges.map((m) => [m.session_id, m.into_session_id])) };
       const nextEdits: Record<string, Partial<SME>> = { ...smeEdits };
       upgrades.forEach((u) => {
         nextEdits[u.sme_id] = { ...nextEdits[u.sme_id], training_level: u.to_level, level: META.levels[u.to_level - 1] };
       });
-      const roster = [...smeData.next, ...extraSmes].map((x) => (nextEdits[x.id] ? { ...x, ...nextEdits[x.id] } : x));
+      const roster = [...smeData[week], ...extraSmes].map((x) => (nextEdits[x.id] ? { ...x, ...nextEdits[x.id] } : x));
       setSessionEdits(edits);
+      setSessionCancels(drops);
+      setSessionMerges(folds);
       setSmeEdits(nextEdits);
       setOverrides((log) => [
         ...reschedules.map((r): OverrideEvent => ({
@@ -1013,13 +1175,23 @@ export default function Page() {
           note: `Class moved from ${r.from_day} ${r.from_hour_ist} to ${r.to_day} ${r.to_hour_ist} — ${r.reason || "copilot plan"}.`,
         })),
         ...upgrades.map((u): OverrideEvent => ({
-          kind: "assigned", session_id: u.unblocks?.[0] ?? "", batch_id: "roster", week: "next",
+          kind: "assigned", session_id: u.unblocks?.[0] ?? "", batch_id: "roster", week,
           from_sme_id: null, to_sme_id: u.sme_id, to_sme_name: u.sme_name, at, actor: "Copilot",
           note: `Training level raised ${u.from_level} → ${u.to_level} — ${u.reason || "copilot plan"}.`,
         })),
+        ...merges.map((m): OverrideEvent => ({
+          kind: "teacher change", session_id: m.session_id, batch_id: m.batch_id, week,
+          from_sme_id: m.from_sme, to_sme_id: "", to_sme_name: m.host_batch_id, at, actor: "Copilot",
+          note: `${m.batch_id} merged into ${m.host_batch_id} for this class — ${m.reason || "copilot plan"}.`,
+        })),
+        ...cancels.map((c): OverrideEvent => ({
+          kind: "teacher change", session_id: c.session_id, batch_id: c.batch_id, week,
+          from_sme_id: c.from_sme, to_sme_id: "", to_sme_name: "cancelled", at, actor: "Copilot",
+          note: `Class cancelled — ${c.reason || "copilot plan"}.`,
+        })),
         ...log,
       ]);
-      const res = await runNext({ sessions: sessionsFor("next", edits), smes: roster, quiet: true });
+      const res = await runWeek(week, { sessions: sessionsFor(week, edits, drops, folds), smes: roster, quiet: true });
       if (!res) return false;
       draftRows = res.draft;
       // runNext diffs teacher and flags; a class that only changed hour would otherwise show no dot
@@ -1033,8 +1205,9 @@ export default function Page() {
       const live = moves.filter((m) => draftRows.some((r) => r.session_id === m.session_id && r.sme_id !== m.to_sme));
       if (live.length && !(await applyPlan(live, draftRows))) return false;
     }
-    if (published.next) setPublished((p) => ({ ...p, next: false }));
-    const n = moves.length + reschedules.length + upgrades.length;
+    if (published[week] && !WEEKS[week].locked) setPublished((p) => ({ ...p, [week]: false }));
+    else if (published[week]) setAmended((a) => ({ ...a, [week]: true }));
+    const n = plan.length;
     say(`Copilot plan applied — ${n} change${n === 1 ? "" : "s"}.`);
     return true;
   };
@@ -1349,15 +1522,19 @@ export default function Page() {
       const settled = leaves.filter((l) => ["sent", "simulated", "skipped", "error"].includes(pubStatus[l.id]));
       const done = settled.length > 0 && !sending;
       const allOn = chosen.length === leaves.length;
-      const reachSmes = new Set(rows.filter((r) => r.sme_id).map((r) => r.sme_id)).size;
-      const reachLearners = batches.filter((b) => rows.some((r) => r.batch_id === b.id)).reduce((a, b) => a + b.learners, 0);
+      const reachSmes = new Set(pubRows.filter((r) => r.sme_id).map((r) => r.sme_id)).size;
+      const reachLearners = batches.filter((b) => pubRows.some((r) => r.batch_id === b.id)).reduce((a, b) => a + b.learners, 0);
+      const amending = !!amended[week];
+      const off = pubRows.filter((r) => !isLive(r)).length;
       return (
         <Sheet
           width={580} eyebrow={`${WEEKS[week].label} · ${WEEKS[week].range}`}
-          title={done ? "Week published" : "Publish the week"}
+          title={done ? (amending ? "Changes sent" : "Week published") : amending ? "Send this week's changes" : "Publish the week"}
           subtitle={done
             ? sendSummary(settled)
-            : `Pick who hears about it and how — ${reachSmes} SMEs, ${reachLearners} students.`}
+            : amending
+              ? `Only the ${pubRows.length} class(es) that changed are re-sent${off ? `, including ${off} no longer running` : ""} — ${reachSmes} SMEs, ${reachLearners} students.`
+              : `Pick who hears about it and how — ${reachSmes} SMEs, ${reachLearners} students.`}
           footerNote={done
             ? "SMEs and students can see the published week now."
             : sending ? "Delivering — do not close this window."
@@ -1535,10 +1712,49 @@ export default function Page() {
       );
     }
 
-    const cands = sheetCandidates(r, rosterFor("next"));
-    const showList = !readOnly && (sheet.stage === "pick" || !r.sme_id);
-    const sme = rosterFor("next").find((s) => s.id === r.sme_id);
+    const roster = rosterFor(sheet.week);
+    const dropped = !isLive(r);
+    const stage = sheet.kind === "class" ? sheet.stage : "info";
+    const cands = sheetCandidates(r, roster);
+    const showList = !readOnly && !dropped && (stage === "pick" || !r.sme_id);
+    const sme = roster.find((s) => s.id === r.sme_id);
     const mineCount = rows.filter((x) => x.sme_id === r.sme_id).length;
+    // The recovery ladder: a class only offers a merge or a cancel once it actually needs rescuing —
+    // no teacher, or the teacher ops just marked unavailable. Otherwise they are noise on every row.
+    const needsRescue = !readOnly && !dropped && (!r.sme_id || (!!r.sme_id && !!unavailable[r.sme_id]));
+    const hosts = needsRescue ? mergeCandidates(r, rows, batches) : [];
+
+    // The cancel step is the class sheet with one question in it: a cancellation with no reason is a
+    // notice to learners that says nothing, so the sheet will not let one through.
+    if (sheet.kind === "cancelClass") {
+      const still = cands.filter((c) => !c.blocked);
+      return (
+        <Sheet
+          eyebrow={`${r.batch_id} · ${course?.name}`} title="Cancel this class"
+          subtitle={`${META.days[p.day]} ${p.label} IST · ${batch?.learners ?? "—"} learners are told.`}
+          banner={still.length
+            ? { text: `${still[0].name} could still take this class. Cancelling is the last resort — assign them instead if you can.`, tone: "amber" }
+            : { text: "Nobody else is eligible for this slot, and no other batch runs this topic at this hour.", tone: "red" }}
+          footerNote={cancelReason.trim().length >= 4
+            ? "The reason is sent to the learners with the cancellation."
+            : "Say why — the learners are told this, not an error code."}
+          footer={[
+            { label: "Keep the class", onClick: () => { setCancelReason(""); setSheet({ kind: "class", sessionId: r.session_id, week: sheet.week, stage: "info" }); } },
+            ...(cancelReason.trim().length >= 4
+              ? [{ label: "Cancel the class", kind: "go" as const, onClick: () => void cancelClass(r, cancelReason.trim()) }]
+              : []),
+          ]}
+          onClose={() => { setCancelReason(""); setSheet(null); }}
+        >
+          <label className="block">
+            <span className="label-caps mb-[6px] block">Why is this class cancelled?</span>
+            <textarea className="field w-full" rows={3} value={cancelReason} autoFocus
+              placeholder="e.g. Ananya is unwell and nobody else carries Dynamic Programming at level 3."
+              onChange={(e) => setCancelReason(e.target.value)} />
+          </label>
+        </Sheet>
+      );
+    }
 
     return (
       <Sheet
@@ -1575,8 +1791,9 @@ export default function Page() {
             },
             {
               label: "Status",
-              value: !r.sme_id ? "Unfilled" : pend ? "Change pending SME approval"
-                : isApproved ? "Approved" : locked ? "Live" : "Draft — not yet approved",
+              value: r.cancelled ? "Cancelled" : r.merged_into ? `Merged into ${rows.find((x) => x.session_id === r.merged_into)?.batch_id ?? r.merged_into}`
+                : !r.sme_id ? "Unfilled" : pend ? "Change pending SME approval"
+                  : isApproved ? "Approved" : locked ? "Live" : "Draft — not yet approved",
             },
           ]}
         footerNote={readOnly
@@ -1589,6 +1806,8 @@ export default function Page() {
         footer={[
           { label: "Close", onClick: () => setSheet(null) },
           ...(role === "sme" && r.sme_id === META.me ? [{ label: "Ask ops to reassign", kind: "go" as const, onClick: () => requestCover(r) }] : []),
+          ...(!readOnly && dropped ? [{ label: "Put it back on the schedule", kind: "go" as const, onClick: () => void restoreClass(r) }] : []),
+          ...(needsRescue ? [{ label: "Cancel this class", onClick: () => setSheet({ kind: "cancelClass", sessionId: r.session_id, week: sheet.week }) }] : []),
           ...(!readOnly && r.sme_id && !isApproved && !locked ? [{ label: "Approve this class", kind: "go" as const, onClick: () => approveOne(r) }] : []),
         ]}
         onClose={() => setSheet(null)}
@@ -1601,13 +1820,13 @@ export default function Page() {
               meta={readOnly
                 ? `★ ${sme.rating.toFixed(1)} learner rating · ${sme.topics.slice(0, 2).join(", ")} · ${sme.city}`
                 : `${sme.level} · ★ ${sme.rating.toFixed(1)} · ${mineCount} of ${sme.preferred} classes this week${leave[sme.id] ? ` · ${leave[sme.id]}` : ""}`}
-              tone={sheet.stage === "pick" ? "active" : "plain"}
+              tone={stage === "pick" ? "active" : "plain"}
               right={readOnly ? undefined : (
                 <span className="whitespace-nowrap text-[11.5px] font-semibold" style={{ color: "var(--brand-deep)" }}>
-                  {sheet.stage === "pick" ? "Choosing…" : "Change teacher →"}
+                  {stage === "pick" ? "Choosing…" : "Change teacher →"}
                 </span>
               )}
-              onClick={readOnly ? undefined : () => setSheet({ ...sheet, stage: sheet.stage === "pick" ? "info" : "pick" })}
+              onClick={readOnly || dropped ? undefined : () => setSheet({ kind: "class", sessionId: r.session_id, week: sheet.week, stage: stage === "pick" ? "info" : "pick" })}
             />
           </div>
         )}
@@ -1633,6 +1852,44 @@ export default function Page() {
             ))}
           </div>
         )}
+        {needsRescue && !!hosts.length && (
+          <div>
+            <SectionLabel>Or merge it into another batch — one class, both cohorts</SectionLabel>
+            <div className="flex flex-col gap-[7px]">
+              {hosts.slice(0, 4).map((h) => (
+                <PersonRow
+                  key={h.row.session_id} id={h.row.batch_id} name={`${h.row.batch_id} · ${h.row.sub_specialty ?? META.type_label[h.row.type]}`}
+                  meta={`${META.days[istParts(h.row.start_utc).day]} ${istParts(h.row.start_utc).label} IST · ${h.learners} learners together · ${
+                    h.row.sme_name ?? "no teacher yet"}`}
+                  right={
+                    <span className="flex items-center gap-2">
+                      {!h.sameHour && (
+                        <span className="whitespace-nowrap rounded-[8px] px-2 py-[3px] text-[10px] font-semibold"
+                          style={{ background: "var(--amber-tint)", color: "var(--amber-ink)" }}>
+                          different hour
+                        </span>
+                      )}
+                      {h.hostUnstaffed && (
+                        <span className="whitespace-nowrap rounded-[8px] px-2 py-[3px] text-[10px] font-semibold"
+                          style={{ background: "var(--red-tint)", color: "var(--red-ink)" }}>
+                          no teacher either
+                        </span>
+                      )}
+                      <span className="whitespace-nowrap text-[11.5px] font-semibold" style={{ color: "var(--brand-deep)" }}>
+                        Merge →
+                      </span>
+                    </span>
+                  }
+                  onClick={() => void mergeClass(r, h.row)}
+                />
+              ))}
+            </div>
+            <div className="mt-2 text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>
+              {r.batch_id} keeps its own schedule everywhere else — this folds one hour only, and the
+              surviving class is re-staffed for the higher of the two required levels.
+            </div>
+          </div>
+        )}
         {showList && (
           <div>
             <SectionLabel>
@@ -1640,7 +1897,7 @@ export default function Page() {
             </SectionLabel>
             <div className="flex flex-col gap-[7px]">
               {cands.map((c) => {
-                const level = rosterFor("next").find((s) => s.id === c.sme_id)?.level ?? "";
+                const level = roster.find((s) => s.id === c.sme_id)?.level ?? "";
                 return (
                   <PersonRow
                     key={c.sme_id} id={c.sme_id} name={c.name}
@@ -1712,6 +1969,7 @@ export default function Page() {
             rows={filtered} allRows={rows} batches={batches} courses={COURSES} meta={META} weeks={WEEKS}
             week={week} weekDates={weekDates} tab={tab} approved={approved} changed={changed}
             batchFilter={batchFilter} statusOff={statusOff} workCount={work.length} published={isPublished}
+            amended={!!amended[week]} changedCount={changed.size} onRepublish={republishChanges}
             overrides={overrides} loading={loading} vh={vh} smeName={smeName}
             onTab={setTab} onBatchFilter={setBatchFilter}
             onStatusToggle={(k: Category) => setStatusOff((s) => ({ ...s, [k]: !s[k] }))}
@@ -1729,6 +1987,7 @@ export default function Page() {
         <SmeManagement
           smes={smes} rows={rows} courses={COURSES} meta={META} weeks={WEEKS} week={week} weekDates={weekDates}
           approved={approved} selected={selSme} leave={leave} query={smeQuery} filter={smeFilter} vh={vh}
+          workload={workloadRows}
           onQuery={setSmeQuery} onFilter={setSmeFilter} onSelect={setSelSme} onOpen={openClass}
           onGhost={(sessionId) => setSheet({ kind: "ghost", sessionId, week, smeId: selSme })}
           onEditSme={openProfile}
@@ -1740,6 +1999,14 @@ export default function Page() {
           syncDetail={syncDetail ?? integrations?.channels.freebusy?.detail}
           syncLive={integrations?.channels.freebusy?.live}
           onImportSmes={() => { setSmeImp(emptyImport()); setSheet({ kind: "smeImport" }); }}
+        />
+      );
+    }
+    if (mod === "history") {
+      return (
+        <PastWeeks
+          weeks={PAST_WEEKS} selected={pastWeek} sessions={PAST_SESSIONS} smes={smes}
+          courses={COURSES} meta={META} vh={vh} onSelect={setPastWeek}
         />
       );
     }
@@ -1811,7 +2078,7 @@ export default function Page() {
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-[14px]">
             <div className="flex items-center gap-[10px]">
-              <div className="tabs tabs-solid">
+              <div className="tabs tabs-solid" style={mod === "history" ? { display: "none" } : undefined}>
                 {(["current", "next"] as WeekKey[]).map((k) => (
                   <button key={k} onClick={() => setWeek(k)} className={`tab ${week === k ? "tab-on" : "tab-off"}`}>
                     {WEEKS[k].label}
@@ -1820,8 +2087,14 @@ export default function Page() {
               </div>
               <span className="whitespace-nowrap text-[12px]" style={{ color: "var(--muted)" }}>{WEEKS[week].range}</span>
               {WEEKS[week].locked ? (
-                <span className="rounded-[9px] px-[10px] py-[5px] text-[11.5px] font-semibold" style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
-                  Live week
+                <span className="rounded-[9px] px-[10px] py-[5px] text-[11.5px] font-semibold"
+                  title={amended[week]
+                    ? "This week is running, and it has changed since it was published — the classes that moved need re-sending."
+                    : "This week is running: only a drop-out recovery changes it."}
+                  style={amended[week]
+                    ? { background: "var(--amber-tint)", color: "var(--amber-ink)" }
+                    : { background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
+                  {amended[week] ? "Live week · amended" : "Live week"}
                 </span>
               ) : isPublished ? (
                 <span className="rounded-[9px] px-[10px] py-[5px] text-[11.5px] font-semibold" style={{ background: "var(--green-tint)", color: "var(--green-ink)" }}>

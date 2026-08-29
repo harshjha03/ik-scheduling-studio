@@ -30,6 +30,8 @@ LEVELS = ["beginner", "intermediate", "advanced"]
 LEVEL_NUM = {name: i + 1 for i, name in enumerate(LEVELS)}
 WEEK_START = {"current": date(2026, 8, 31), "next": date(2026, 9, 7)}
 PRIOR_WEEKS = ["2026-W32", "2026-W33", "2026-W34", "2026-W35"]
+# W36 (the "current" week) starts 31 Aug, so the four prior weeks walk back from there.
+WEEK_START.update({wk: date(2026, 8, 3) + timedelta(days=7 * i) for i, wk in enumerate(PRIOR_WEEKS)})
 
 COURSES = {
     "DSA": {"id": "DSA", "name": "Data Structures & Algorithms", "accent": "#2f5fd0", "tint": "#e9eff8", "deep": "#1f3c78",
@@ -330,6 +332,113 @@ def build_history(smes: list[dict], batches: list[dict]) -> list[dict]:
     return records
 
 
+# ---------------- past weeks as real class rows ----------------
+
+# One deliberate drop per past week, so the history module has real cancellations and merges to show
+# and the new paths have data behind them before anyone touches the live week.
+PAST_DROPS = {
+    "2026-W33": ("cancel", "DSA-03", "Teacher ill and no cover was free at that hour."),
+    "2026-W35": ("merge", "ML-02", None),
+}
+
+
+def build_past_week(wk: str, smes: list[dict], batches: list[dict], history: list[dict]) -> list[dict]:
+    """The real class rows for one past week, laid out so they reproduce `history` exactly.
+
+    History is the source of truth here, not the rows. The seed's fairness edge cases are calibrated
+    on those counts (T01's deliberate overload is the whole of E5), and deriving them from freshly
+    placed rows would move the numbers the demo is tuned against. So the rows are built to match, and
+    test_past_weeks_reconcile_with_history is what holds the two together from here on.
+    """
+    recs = {r["sme_id"]: r for r in history if r["week"] == wk}
+    by_batch = {b["id"]: b for b in batches}
+    by_sme = {s["id"]: s for s in smes}
+    sme_busy: dict[tuple[int, int], set[str]] = {}
+    batch_busy: dict[tuple[int, int], set[str]] = {}
+    cells = [(d, h) for d in range(len(DAYS)) for h in HOURS]
+    sessions: list[dict] = []
+    seq: dict[str, int] = {}
+
+    def place(sid: str, batch_id: str, k: int) -> bool:
+        sme, batch = by_sme[sid], by_batch[batch_id]
+        topics = [t for t in COURSES[batch["course"]]["topics"] if S.carries_topic(sme, t)]
+        typ = ("mock" if k % 4 == 3 else "doubt" if k % 4 == 2 else "class")
+        topic = None if typ == "doubt" else (topics[k % len(topics)] if topics else None)
+        level = min(LEVEL_NUM[batch["level"]], sme["training_level"])
+        for d, h in cells:
+            if sid in sme_busy.get((d, h), set()) or batch_id in batch_busy.get((d, h), set()):
+                continue
+            start = cell_dt(wk, d, h)
+            if not S.is_available(sme, start, start + timedelta(minutes=60)):
+                continue
+            sme_busy.setdefault((d, h), set()).add(sid)
+            batch_busy.setdefault((d, h), set()).add(batch_id)
+            n = seq[batch_id] = seq.get(batch_id, -1) + 1
+            sessions.append({
+                "id": f"{wk.split('-')[1]}-{batch_id}-{n}", "batch_id": batch_id, "subject": batch["course"],
+                "sub_specialty": topic, "type": typ,
+                "start_utc": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "duration_min": 60, "mode": "online",
+                "required_training_level": level, "day": d, "hour": h,
+                "sme_id": sid, "sme_name": sme["name"],       # a past week is settled, not drafted
+            })
+            return True
+        return False
+
+    # heaviest teacher first: T01 carries twice everyone else's load and needs the pick of the grid
+    for sid in sorted(recs, key=lambda x: (-recs[x]["sessions_taught"], x)):
+        rec = recs[sid]
+        homes = [b for b in rec["batches"] if b in by_batch
+                 and S.teaches_subject(by_sme[sid], by_batch[b]["course"])]
+        if not homes:
+            homes = [b["id"] for b in batches if S.teaches_subject(by_sme[sid], b["course"])][:2]
+        for k in range(int(rec["sessions_taught"])):
+            if not place(sid, homes[k % len(homes)], k):
+                raise AssertionError(f"{wk}: no free cell for {sid} class {k + 1}")
+
+    kind_batch = PAST_DROPS.get(wk)
+    if kind_batch:
+        kind, batch_id, why = kind_batch
+        batch = by_batch[batch_id]
+        # the dropped class is extra: nobody taught it, so it is not in anyone's sessions_taught
+        host = next((x for x in sessions if x["batch_id"] != batch_id and x["subject"] == batch["course"]), None)
+        n = seq[batch_id] = seq.get(batch_id, -1) + 1
+        d, h = (host["day"], host["hour"]) if kind == "merge" and host else (4, 18)
+        row = {"id": f"{wk.split('-')[1]}-{batch_id}-{n}", "batch_id": batch_id, "subject": batch["course"],
+               "sub_specialty": host["sub_specialty"] if kind == "merge" and host else COURSES[batch["course"]]["topics"][0],
+               "type": "class", "start_utc": cell_dt(wk, d, h).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "duration_min": 60, "mode": "online", "required_training_level": 1, "day": d, "hour": h,
+               "sme_id": None, "sme_name": None}
+        if kind == "cancel":
+            row["cancelled"] = {"reason": why, "by": "Ops", "at": f"{WEEK_START[wk]}T09:00:00Z"}
+        elif host:
+            row["merged_into"] = host["id"]
+        sessions.append(row)
+    sessions.sort(key=lambda x: (x["start_utc"], x["id"]))
+    return sessions
+
+
+def reconcile_history(past: dict[str, list[dict]], history: list[dict], smes: list[dict]) -> None:
+    """Write back the batches the past rows actually show.
+
+    `build_history` seeds a home-batch set for continuity and leaves a few teachers with none — but a
+    class always belongs to a batch, so a record saying "4 sessions, no batches" cannot be true once
+    the rows exist. The rows are the concrete thing; the record follows them. Mutates in place.
+    """
+    per_sme = {s["id"]: s for s in smes}
+    for wk, rows in past.items():
+        taught: dict[str, set[str]] = {}
+        for r in rows:
+            if S.is_live(r) and r.get("sme_id"):
+                taught.setdefault(r["sme_id"], set()).add(r["batch_id"])
+        for rec in history:
+            if rec["week"] != wk:
+                continue
+            rec["batches"] = sorted(set(rec["batches"]) | taught.get(rec["sme_id"], set()))
+            for own in per_sme[rec["sme_id"]]["history"]:
+                if own["week"] == wk:
+                    own["batches"] = list(rec["batches"])
+
+
 # ---------------- self check ----------------
 
 def self_check(cur, nxt, smes, history):
@@ -399,11 +508,23 @@ def main():
     for s, sc in zip(smes, smes_cur):
         sc["history"] = s["history"]
     cur = plan_week("current", smes_cur, BATCHES)
+    past = {wk: build_past_week(wk, build_smes(wk), BATCHES, history) for wk in PRIOR_WEEKS}
+    reconcile_history(past, history, smes)
+    for s, sc in zip(smes, smes_cur):
+        sc["history"] = s["history"]
     self_check(cur, nxt, smes, history)
 
     out = os.path.join(ROOT, "data")
     os.makedirs(out, exist_ok=True)
+    past_meta = []
+    for wk in PRIOR_WEEKS:
+        a = WEEK_START[wk]
+        b = a + timedelta(days=5)
+        past_meta.append({"iso": wk, "label": f"Week {wk.split('-W')[1]}",
+                          "range": f"{a.day} {a:%b} – {b.day} {b:%b %Y}"})
     files = {
+        **{f"sessions_{wk.split('-')[1].lower()}": rows for wk, rows in past.items()},
+        "past_weeks": past_meta,
         "sessions_current": cur, "sessions_next": nxt, "smes": smes, "smes_current": smes_cur,
         "history": history, "batches": build_batches(), "courses": COURSES, "weeks": WEEKS,
         "meta": {"days": DAYS, "hours": [HOURS[0], HOURS[-1] + 1], "levels": LEVELS,

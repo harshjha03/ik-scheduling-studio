@@ -9,11 +9,27 @@ from .llm import active_model, explain, fallback_cfg, llm_provider, stage_c_llm_
 
 def _base_row(session: dict) -> dict:
     row = {k: session.get(k) for k in ("batch_id", "subject", "sub_specialty", "type", "start_utc",
-                                        "duration_min", "mode", "required_training_level")}
+                                        "duration_min", "mode", "required_training_level",
+                                        # a dropped or folded class keeps its row: the calendar, the CSV
+                                        # and the publish notice all still have something to say about it
+                                        "cancelled", "merged_into", "merged_batches")}
     row.update({"session_id": session["id"], "sme_id": None, "sme_name": None, "score": None,
                 "components": None, "stage": None, "flags": [], "candidates": [], "eliminated": [],
                 "adjusted_from_override": False, "override_effect": None, "score_now": None})
     return row
+
+
+def _dropped_flag(row: dict, by_session: dict) -> dict:
+    """The one flag a non-live row carries, so the UI and the export learn why from the same place."""
+    if row.get("cancelled"):
+        c = row["cancelled"] if isinstance(row["cancelled"], dict) else {}
+        who = c.get("by") or "ops"
+        why = c.get("reason") or "no reason given"
+        return S.make_flag("CLASS_CANCELLED", row["session_id"], f"Cancelled by {who} — {why}")
+    host = by_session.get(row["merged_into"])
+    where = host["batch_id"] if host else row["merged_into"]
+    return S.make_flag("CLASS_MERGED", row["session_id"],
+                       f"{row['batch_id']} joins {where} for this class.")
 
 
 def _candidate_payload(cand: dict, sme: dict, hist: dict) -> dict:
@@ -39,7 +55,10 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
     # never named. That coupling is the model being right, and it used to read as random churn.
     touched = {sid for o in (overrides or []) for sid in (o.get("from_sme_id"), o.get("to_sme_id")) if sid}
     by_id = {s["id"]: s for s in smes}
-    ordered = sorted(sessions, key=lambda s: (s["start_utc"], s["id"]))
+    # A merged class raises its host's required level before anything is scored — the host now teaches
+    # both cohorts, so it must be staffed for the harder of the two.
+    ordered = sorted(S.apply_merges(sessions), key=lambda s: (s["start_utc"], s["id"]))
+    by_session = {s["id"]: s for s in ordered}     # the host of a merge may come later in the week
     rows: dict[str, dict] = {}
     draft: list[dict] = []           # rows currently holding an sme_id (auto or tentative)
     counts: Counter = Counter()      # sme_id -> sessions in this draft
@@ -53,6 +72,9 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
     for sess in ordered:
         row = _base_row(sess)
         rows[sess["id"]] = row
+        if not S.is_live(row):
+            row["flags"].append(_dropped_flag(row, by_session))
+            continue
         survivors, eliminated = S.stage_a_hard_filter(sess, smes, draft)
         row["eliminated"] = eliminated
         if not survivors:
@@ -124,6 +146,9 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
     final_counts = Counter(r["sme_id"] for r in final_draft)
     for sess in ordered:
         row = rows[sess["id"]]
+        if not S.is_live(row):
+            row["flags"] = S.sort_flags(row["flags"])
+            continue                    # nothing to staff, so nothing to offer alternatives for
         survivors, eliminated = S.stage_a_hard_filter(sess, smes, final_draft, exclude_session_id=sess["id"])
         row["eliminated"] = eliminated
         own = Counter(final_counts)
@@ -161,6 +186,7 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         row["flags"] = S.sort_flags(row["flags"])
 
     draft_rows = [rows[s["id"]] for s in ordered]
+    live = S.live_rows(draft_rows)
     flags = S.sort_flags([f for r in draft_rows for f in r["flags"]])
     # Three views of the same band, because one number was being misread. `spread` is the 4-week
     # projected load spread (the metric of record); `inherited` is how much of it the week arrived
@@ -183,7 +209,10 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         "assigned": sum(1 for r in draft_rows if r["sme_id"]),
         "auto_assigned": sum(1 for r in draft_rows if r["stage"] == "auto"),
         "llm_resolved": sum(1 for r in draft_rows if r["stage"] == "llm"),
-        "unfilled": sum(1 for r in draft_rows if not r["sme_id"]),
+        # a cancelled or merged class is not an unstaffed one: counting it would block a publish forever
+        "unfilled": sum(1 for r in live if not r["sme_id"]),
+        "cancelled": sum(1 for r in draft_rows if r.get("cancelled")),
+        "merged": sum(1 for r in draft_rows if r.get("merged_into")),
         "flags_by_severity": dict(Counter(f["severity"] for f in flags)),
         "flags_by_code": dict(Counter(f["code"] for f in flags)),
         "fairness_spread_per_subject": spread,

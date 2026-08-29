@@ -1,6 +1,6 @@
 export type WeekKey = "current" | "next";
 export type Role = "coordinator" | "sme" | "student";
-export type ModuleKey = "dashboard" | "smes" | "batches" | "myweek" | "mysched";
+export type ModuleKey = "dashboard" | "smes" | "batches" | "history" | "myweek" | "mysched";
 export type SessionType = "class" | "doubt" | "mock";
 export type LevelName = "beginner" | "intermediate" | "advanced";
 
@@ -46,6 +46,14 @@ export interface Meta {
   my_batch: string;
 }
 
+/** Why a class is not running. Set by ops or the copilot; the engine never staffs a cancelled class
+ *  but keeps its row so the calendar, the CSV and the cancellation notice all still have it. */
+export interface Cancellation {
+  reason: string;
+  by: string;
+  at?: string;
+}
+
 export interface Session {
   id: string;
   batch_id: string;
@@ -56,6 +64,21 @@ export interface Session {
   duration_min: number;
   mode: string;
   required_training_level: number;
+  cancelled?: Cancellation | null;
+  /** this class is folded into another one for the hour; that class teaches both cohorts */
+  merged_into?: string | null;
+  /** on the host: the batches folded into it */
+  merged_batches?: string[] | null;
+  /** a past week is settled, so its rows carry the teacher who actually took the class */
+  sme_id?: string | null;
+  sme_name?: string | null;
+}
+
+/** One archived week: what actually ran, in the same row shape the live weeks use. */
+export interface PastWeek {
+  iso: string;
+  label: string;
+  range: string;
 }
 
 export interface AvailabilityWindow {
@@ -106,7 +129,9 @@ export type FlagCode =
   | "RULE_OVERRIDE_RISK"
   | "FAIRNESS_VIOLATION"
   | "TIE_ESCALATED"
-  | "LLM_FALLBACK";
+  | "LLM_FALLBACK"
+  | "CLASS_CANCELLED"
+  | "CLASS_MERGED";
 
 export type Severity = "critical" | "high" | "medium" | "info";
 
@@ -144,6 +169,9 @@ export interface Eliminated {
 
 export interface DraftRow {
   session_id: string;
+  cancelled?: Cancellation | null;
+  merged_into?: string | null;
+  merged_batches?: string[] | null;
   batch_id: string;
   subject: string;
   sub_specialty: string | null;
@@ -201,6 +229,8 @@ export interface RunResult {
     auto_assigned: number;
     llm_resolved: number;
     unfilled: number;
+    cancelled?: number;
+    merged?: number;
     flags_by_severity: Partial<Record<Severity, number>>;
     flags_by_code: Partial<Record<FlagCode, number>>;
     /** 4-week projected load spread per pool — the metric of record */
@@ -261,7 +291,7 @@ export interface ApprovalsResult {
 
 // ---- UI ----
 
-export type Category = "red" | "amber" | "approved" | "staffed";
+export type Category = "red" | "amber" | "approved" | "staffed" | "dropped";
 
 export interface WorkItem {
   key: string;
@@ -331,6 +361,8 @@ export type SheetState =
   | { kind: "profile" }
   | { kind: "studentEmail" }
   | { kind: "agent" }
+  /** the class sheet's cancel step: a reason is required before anything is dropped */
+  | { kind: "cancelClass"; sessionId: string; week: WeekKey }
   | null;
 
 /** The editable half of an SME record — contact details and the weekly preference. Skills, level
@@ -362,7 +394,7 @@ export interface AgentRequest {
   question?: string;
 }
 
-export type AgentActionKind = "move" | "reschedule" | "upgrade";
+export type AgentActionKind = "move" | "reschedule" | "upgrade" | "merge" | "cancel";
 
 interface AgentActionBase {
   kind?: AgentActionKind;
@@ -406,10 +438,35 @@ export interface AgentUpgradeAction extends AgentActionBase {
   unblocks?: string[];
 }
 
-export type AgentMove = AgentMoveAction | AgentRescheduleAction | AgentUpgradeAction;
+/** Fold this class into another batch's class for one hour. Both cohorts sit the surviving class. */
+export interface AgentMergeAction extends AgentActionBase {
+  kind: "merge";
+  session_id: string;
+  into_session_id: string;
+  batch_id: string;
+  host_batch_id: string;
+  from_sme: string | null;
+  learners?: number;
+  eligible_after?: { sme_id: string; name: string }[];
+}
+
+/** Drop the class. The bottom of the ladder — `reason` is required and reaches the learners. */
+export interface AgentCancelAction extends AgentActionBase {
+  kind: "cancel";
+  session_id: string;
+  batch_id: string;
+  from_sme: string | null;
+  from_sme_name?: string | null;
+  learners?: number;
+}
+
+export type AgentMove =
+  | AgentMoveAction | AgentRescheduleAction | AgentUpgradeAction | AgentMergeAction | AgentCancelAction;
 
 export const isReschedule = (a: AgentMove): a is AgentRescheduleAction => a.kind === "reschedule";
 export const isUpgrade = (a: AgentMove): a is AgentUpgradeAction => a.kind === "upgrade";
+export const isMerge = (a: AgentMove): a is AgentMergeAction => a.kind === "merge";
+export const isCancel = (a: AgentMove): a is AgentCancelAction => a.kind === "cancel";
 export const isMove = (a: AgentMove): a is AgentMoveAction => !a.kind || a.kind === "move";
 
 export interface AgentStep {

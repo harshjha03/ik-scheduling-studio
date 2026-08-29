@@ -1004,3 +1004,49 @@ def test_freebusy_asks_only_for_the_scope_the_credentials_already_have():
     finally:
         C._google_token = real
     assert asked == [] or asked == [(C.CAL_SCOPE,)], asked
+
+
+# ---------------- cancelled and merged classes ----------------
+
+def test_a_cancelled_class_is_never_staffed_and_never_blocks_publish():
+    """A cancelled class keeps its row so the calendar and the notice still have it, but it must not
+    read as unstaffed — an UNFILLED flag here would block the publish for a class nobody is running."""
+    live = session("S1")
+    dead = session("S2", start="2026-08-31T06:30:00Z")
+    dead["cancelled"] = {"reason": "Teacher out, no cover", "by": "Ops"}
+    out = run_pipeline([live, dead], [sme("A")], [], [], llm_enabled=False)
+    rows = {r["session_id"]: r for r in out["draft"]}
+    assert rows["S1"]["sme_id"] == "A"
+    assert rows["S2"]["sme_id"] is None
+    assert [f["code"] for f in rows["S2"]["flags"]] == ["CLASS_CANCELLED"]
+    assert "Ops" in rows["S2"]["flags"][0]["reason"] and "no cover" in rows["S2"]["flags"][0]["reason"]
+    assert out["stats"]["unfilled"] == 0 and out["stats"]["cancelled"] == 1
+
+
+def test_a_cancelled_class_frees_its_teacher_for_the_same_hour():
+    """The whole point of cancelling: the hour is now free. One SME, two clashing classes, one dropped."""
+    a = session("S1", batch="B01")
+    b = session("S2", batch="B02")
+    b["cancelled"] = {"reason": "Merged elsewhere", "by": "Ops"}
+    out = run_pipeline([a, b], [sme("A")], [], [], llm_enabled=False)
+    rows = {r["session_id"]: r for r in out["draft"]}
+    assert rows["S1"]["sme_id"] == "A"            # no HARD_CONFLICT: S2 was never in the running
+    assert not any(f["code"] == "HARD_CONFLICT" for f in out["flags"])
+
+
+def test_a_merged_class_hands_its_level_to_the_host():
+    """Two cohorts in one hour: the surviving class must be staffed for the harder of the two, or the
+    merge quietly downgrades what the advanced batch is taught."""
+    host = session("S1", batch="B01", level=1)
+    joiner = session("S2", batch="B02", level=3)
+    joiner["merged_into"] = "S1"
+    smes = [sme("A", level=1), sme("B", level=3)]
+    out = run_pipeline([host, joiner], smes, [], [], llm_enabled=False)
+    rows = {r["session_id"]: r for r in out["draft"]}
+    assert rows["S1"]["sme_id"] == "B"                      # level 1 would have been enough alone
+    assert rows["S1"]["required_training_level"] == 3
+    assert rows["S1"]["merged_batches"] == ["B02"]
+    assert rows["S2"]["sme_id"] is None
+    assert [f["code"] for f in rows["S2"]["flags"]] == ["CLASS_MERGED"]
+    assert "B02 joins B01" in rows["S2"]["flags"][0]["reason"]
+    assert out["stats"]["merged"] == 1 and out["stats"]["unfilled"] == 0

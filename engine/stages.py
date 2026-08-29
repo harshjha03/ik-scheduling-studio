@@ -16,6 +16,8 @@ OVERRIDE_BONUS = 0.1
 # Enough that a pick which would push an SME outside the band loses to any candidate that would not:
 # the largest legitimate advantage a candidate can hold is continuity (0.3) plus performance (0.2).
 FAIRNESS_PENALTY = -0.5
+# Two batches folded into one class for a single hour still have to fit in one room/call.
+MERGE_LEARNER_CAP = 80
 
 # code -> (priority, severity). Sort/color by priority.
 FLAG_TABLE = {
@@ -25,6 +27,8 @@ FLAG_TABLE = {
     "FAIRNESS_VIOLATION": (4, "medium"),
     "TIE_ESCALATED": (5, "info"),
     "LLM_FALLBACK": (6, "info"),
+    "CLASS_CANCELLED": (7, "info"),
+    "CLASS_MERGED": (7, "info"),
 }
 LLM_FALLBACK_REASON = "LLM unavailable — resolved by deterministic score."
 
@@ -45,6 +49,37 @@ def make_flag(code: str, session_id: str, reason: str, sme_id: str | None = None
 
 def sort_flags(flags: list[dict]) -> list[dict]:
     return sorted(flags, key=lambda f: (f["priority"], f["session_id"]))
+
+
+# ---------- live rows ----------
+
+def is_live(row: dict) -> bool:
+    """Is this class still something that needs a teacher?
+
+    A cancelled class and a class folded into another one both keep their row — the calendar, the CSV
+    and the publish notice all need them — but neither is staffable. Every place that treats a row as
+    schedulable filters through here, so a dropped class can never be counted, flagged UNFILLED,
+    double-booked against, or block a publish.
+    """
+    return not row.get("cancelled") and not row.get("merged_into")
+
+
+def live_rows(rows: list[dict]) -> list[dict]:
+    return [r for r in rows if is_live(r)]
+
+
+def apply_merges(sessions: list[dict]) -> list[dict]:
+    """Fold every `merged_into` session into its host: the host takes the higher required level and
+    carries both batch ids. Returns new dicts — the caller's sessions are never mutated."""
+    out = {s["id"]: {**s} for s in sessions}
+    for s in sessions:
+        host = out.get(s.get("merged_into"))
+        if not host or host["id"] == s["id"]:
+            continue
+        host["required_training_level"] = max(int(host.get("required_training_level", 1) or 1),
+                                              int(s.get("required_training_level", 1) or 1))
+        host["merged_batches"] = sorted(set(host.get("merged_batches") or []) | {s["batch_id"]})
+    return list(out.values())
 
 
 def rule_label(rule: str) -> str:
@@ -320,6 +355,7 @@ def stage_d_validate(rows: list[dict], smes: list[dict], hist: dict) -> list[dic
     (keep, emit FAIRNESS_VIOLATION). Mutates and returns rows."""
     by_id = {s["id"]: s for s in smes}
     accepted: dict[str, list[dict]] = {}
+    rows = live_rows(rows)
     for row in sorted(rows, key=lambda r: (r["start_utc"], r["session_id"])):
         if not row.get("sme_id"):
             continue

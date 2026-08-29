@@ -179,7 +179,9 @@ def publish(body: dict = Body(...)):
     for key in ("week", "channel", "audience"):
         if not body.get(key):
             raise HTTPException(422, f"`{key}` is required")
-    rows = [r for r in (body.get("rows") or []) if r.get("sme_id")]
+    # A class that is not running is still news: a cancellation and a merge both have to reach the
+    # people who were expecting it. They have no teacher, so they would otherwise be filtered away.
+    rows = [r for r in (body.get("rows") or []) if r.get("sme_id") or r.get("cancelled") or r.get("merged_into")]
     smes = {s["id"]: s for s in (body.get("smes") or [])}
     batches = body.get("batches") or []
     week, channel, audience = body["week"], body["channel"], body["audience"]
@@ -305,7 +307,8 @@ def _agent_ctx(body: dict) -> dict:
             raise HTTPException(422, "`sme_id` is required in recovery mode")
         unavailable = {"sme_id": body["sme_id"], "days": body.get("days") or None}
     try:
-        return tools.make_ctx(body.get("week") or "this week", body["draft"], body["smes"], body.get("history") or [], unavailable)
+        return tools.make_ctx(body.get("week") or "this week", body["draft"], body["smes"],
+                              body.get("history") or [], unavailable, body.get("batches") or [])
     except tools.ToolError as e:
         raise HTTPException(422, str(e))
 
@@ -335,12 +338,14 @@ def agent_apply(body: dict = Body(...)):
     plan = body.get("plan")
     if not isinstance(plan, list) or not plan:
         raise HTTPException(422, "`plan` must be a non-empty list of moves")
-    # Reschedules and upgrades change the *source* data (the session's hour, the roster's levels), which
-    # the client owns and re-runs the whole pipeline over. This route only ever writes staffing moves.
+    # Reschedules, upgrades, cancels and merges change the *source* data (the session's hour, whether it
+    # runs at all, the roster's levels), which the client owns and re-runs the whole pipeline over.
+    # This route only ever writes staffing moves.
     other = [a for a in plan if isinstance(a, dict) and tools._kind_of(a) != "move"]
     if other:
-        raise HTTPException(422, {"message": "this route applies staffing moves only; apply reschedule/upgrade "
-                                             "entries to the draft's sessions and roster, then re-run the pipeline",
+        raise HTTPException(422, {"message": "this route applies staffing moves only; apply "
+                                             "reschedule/upgrade/cancel/merge entries to the draft's sessions "
+                                             "and roster, then re-run the pipeline",
                                   "kinds": sorted({tools._kind_of(a) for a in other})})
     ctx = _agent_ctx({**body, "mode": "apply"})
     try:

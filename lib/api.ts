@@ -1,5 +1,5 @@
 import type {
-  AgentApplyResult, AgentMove, AgentRequest, AgentResult, ApprovalsResult, ChatTurn, Decision, DraftRow,
+  AgentApplyResult, AgentMove, AgentRequest, AgentResult, ApprovalsResult, Batch, ChatTurn, Decision, DraftRow,
   DataProvenance, ExportRow, HistoryRecord, OverrideEvent, RunResult, Session, SME,
 } from "./types";
 
@@ -62,11 +62,14 @@ export async function loadSchedule(week: string): Promise<SavedSchedule | null> 
 /** The copilot reasons over the draft the page holds — nothing is applied by this call. */
 export function agentRun(
   week: string, req: AgentRequest, draft: DraftRow[], smes: SME[], history: HistoryRecord[], turns?: ChatTurn[],
+  batches?: Batch[],
 ) {
   return post<AgentResult>("/api/agent/run", {
     week, mode: req.mode, sme_id: req.smeId, days: req.days?.length ? req.days : null, question: req.question,
     // only role + content travel: the server re-derives everything else from the draft it is sent
     turns: turns?.map((t) => ({ role: t.role, content: t.content })), draft, smes, history,
+    // learner counts, and only that: the merge cap is the one rule the engine cannot read off a row
+    batches,
   });
 }
 

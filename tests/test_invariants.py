@@ -141,3 +141,68 @@ def test_random_weeks_survive_an_override(seed):
     res = run_pipeline(sessions, smes, history, ov, llm_enabled=False)
     assert_result_shape(res, sessions, f"{seed}+override")
     assert_no_hard_rule_violation(res["draft"], smes, f"{seed}+override")
+
+
+# ---------------- seed data: the past weeks and the history must agree ----------------
+
+def _seed(name):
+    import json
+    with open(os.path.join(ROOT, "data", f"{name}.json")) as f:
+        return json.load(f)
+
+
+def test_past_weeks_reconcile_with_history():
+    """The past-week class rows and history.json describe the same four weeks, and the fairness
+    numbers the UI shows come off one of them while the engine scores off the other. If they ever
+    drift, a coordinator is told a teacher taught 4 classes while the calendar shows 6."""
+    history = _seed("history")
+    for meta in _seed("past_weeks"):
+        wk = meta["iso"]
+        rows = _seed(f"sessions_{wk.split('-')[1].lower()}")
+        recs = {r["sme_id"]: r for r in history if r["week"] == wk}
+        assert recs, f"{wk} has no history records"
+        taught: dict[str, int] = {}
+        batches: dict[str, set] = {}
+        for r in rows:
+            if not S.is_live(r) or not r.get("sme_id"):
+                continue           # a cancelled or merged class was taught by nobody
+            taught[r["sme_id"]] = taught.get(r["sme_id"], 0) + 1
+            batches.setdefault(r["sme_id"], set()).add(r["batch_id"])
+        for sid, rec in recs.items():
+            assert taught.get(sid, 0) == rec["sessions_taught"], f"{wk}/{sid} class count"
+            assert batches.get(sid, set()) <= set(rec["batches"]), f"{wk}/{sid} taught an unlisted batch"
+
+
+def test_past_weeks_hold_the_hard_rules():
+    """A past week is real data the workload view reads: no teacher may be in two places at once, and
+    nobody may hold a class they were never qualified for."""
+    smes = {s["id"]: s for s in _seed("smes")}
+    for meta in _seed("past_weeks"):
+        rows = [r for r in _seed(f"sessions_{meta['iso'].split('-')[1].lower()}") if S.is_live(r)]
+        seen: dict[str, list] = {}
+        for r in rows:
+            sid = r.get("sme_id")
+            if not sid:
+                continue
+            sme = smes[sid]
+            assert S.teaches_subject(sme, r["subject"]), f"{r['id']}: {sid} does not teach {r['subject']}"
+            assert S.carries_topic(sme, r.get("sub_specialty")), f"{r['id']}: {sid} lacks the topic"
+            assert int(sme["training_level"]) >= int(r["required_training_level"]), f"{r['id']}: level"
+            for other in seen.get(sid, []):
+                assert not S.overlaps(other, r), f"{sid} double-booked: {other['id']} vs {r['id']}"
+            seen.setdefault(sid, []).append(r)
+
+
+def test_the_ui_and_the_engine_agree_on_the_fairness_window():
+    """lib/view.ts computes the workload card and the merge picker from its own copy of these
+    constants. Two different answers to "how many classes over how many weeks" on one screen is
+    worse than no answer, so the copies are pinned here."""
+    import re
+    with open(os.path.join(ROOT, "lib", "view.ts")) as f:
+        view = f.read()
+    for name, expected in (("PAST_WEEKS_FOR_LOAD", S.PAST_WEEKS_FOR_LOAD),
+                           ("FAIRNESS_BAND", S.FAIRNESS_BAND),
+                           ("MERGE_LEARNER_CAP", S.MERGE_LEARNER_CAP)):
+        m = re.search(rf"export const {name} = (\d+);", view)
+        assert m, f"lib/view.ts no longer exports {name}"
+        assert int(m.group(1)) == expected, f"{name}: view.ts says {m.group(1)}, engine says {expected}"

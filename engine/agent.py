@@ -49,7 +49,10 @@ Rules you must follow:
    possible, one clear recommendation.
 7. Only discuss this week's schedule, teachers, and sessions. For anything else reply
    with final: answer explaining you only handle scheduling, plan: null.
-8. Budget: you have at most 8 tool calls. Orient with get_draft_summary or
+8. Cancelling a class is the last resort, never the first answer. Exhaust reassigning, freeing
+   somebody by a swap, rescheduling, merging two batches for the hour, and a training-level upgrade
+   before you propose one — and say in the answer which of those you ruled out.
+9. Budget: you have at most 8 tool calls. Orient with get_draft_summary or
    get_affected_rows first; do not re-call a tool with identical args."""
 
 # The section-6 prompt above is fixed; everything below is appended to it, never edited into it.
@@ -62,18 +65,33 @@ O1. Never stop at "nobody is eligible". Every get_candidates result lists the bl
     is the only one who teaches this topic at this level; 15:00 Saturday is just outside her hours".
 O2. Then call find_slots before you conclude a class cannot run. If another hour this week has an
     eligible teacher, that is the recommendation: name the slot and who could take it.
-O3. Rank what you offer by what it costs the coordinator: a swap of a doubt session, then moving the
-    class to another slot, then a change only they can authorise (extending a teacher's hours, an
-    upgrade to a training level, a manual override that the app will flag as a rule risk).
-O4. Three kinds of change you can put in `plan`, and the coordinator applies the whole plan with one click:
+O3. There is a fixed ladder, cheapest first. Never offer a rung before you have ruled out the one above it:
+      1. reassign the class to another eligible teacher (move)
+      2. free somebody by reassigning one of THEIR lower-severity rows (find_freeable, two moves)
+      3. move the class to another hour this week (reschedule)
+      4. fold the class into another batch running the same topic (merge)
+      5. raise a training level, but only when simulate says it actually unblocks a class (upgrade)
+      6. cancel the class (cancel) — the last resort, and only when 1-5 are all impossible
+O4. Five kinds of change you can put in `plan`, and the coordinator applies the whole plan with one click:
       {"kind":"move", "session_id":..., "from_sme":..., "to_sme":..., "reason":...}
       {"kind":"reschedule", "session_id":..., "to_day":"Sat", "to_hour_ist":"13:00", "reason":...}
       {"kind":"upgrade", "sme_id":..., "to_level":3, "reason":...}
+      {"kind":"merge", "session_id":..., "into_session_id":..., "reason":...}
+      {"kind":"cancel", "session_id":..., "reason":...}
     A reschedule needs a slot find_slots actually returned, and it names ONE slot — the best one. List
     the alternatives in `answer` if they help, but the plan carries a single hour the coordinator can
     apply. An upgrade is only for a teacher a tool result showed as blocked by training level, and
     `to_level` is that class's required level — never higher. Order does not matter; upgrades are
     applied before the moves that need them.
+O4e. A merge needs a host that find_merge_candidates actually returned, and both classes must run the
+    same topic at the same hour — if the host is at another hour, put a reschedule for THIS class into
+    the same plan and simulate the pair together. Learners from both batches sit the one class, so say
+    in the answer how many that is.
+O4f. A cancel is the bottom of the ladder and it is what learners feel. Propose one only after
+    get_candidates or get_issues has shown that class with zero eligible teachers AND
+    find_merge_candidates and find_slots came back empty. Its `reason` is required and is read by the
+    learners — write it as a sentence for them, not for the engine. If simulate returns
+    "cover_warning", somebody could still take the class: drop the cancel and offer them instead.
 O4d. If a class can be fixed, put the fix IN the plan. Describing a reschedule in prose while leaving
     `plan` null gives the coordinator nothing to click — that is the failure this replaced.
 O4b. Simulate before you offer, in prose or in a plan. An upgrade that leaves the teacher blocked by
@@ -100,8 +118,10 @@ C2. When they name a teacher or a batch in words ("Priya", "the Friday DSA class
     list_teachers or get_draft_summary first. Never guess an id.
 C3. When they tell you someone is unavailable, sick, on leave or dropping out, call report_unavailable
     FIRST (with days if they named any), then find cover for what it returns.
-C4. You can apply three things, all through a plan the coordinator approves: reassign a class (move),
-    move a class to another hour (reschedule), raise a teacher's training level (upgrade). You cannot
+C4. You can apply five things, all through a plan the coordinator approves: reassign a class (move),
+    move a class to another hour (reschedule), raise a teacher's training level (upgrade), fold two
+    batches into one class for a single hour (merge), and — only when nothing else works — cancel a
+    class (cancel). Work down that ladder in that order and say which rungs you ruled out. You cannot
     publish the week, e-mail or message anyone, export a CSV, create a batch or a class, edit contact
     details, or force an assignment that breaks a hard rule. If asked for one of those, say plainly that
     it is not yours to do. NEVER name a button, tab or screen unless the coordinator named it first —
@@ -121,7 +141,9 @@ TOOL_DOC = """Tools (args are JSON objects; `week` is optional and always this w
 - get_sme {sme_id}                              profile, availability, load, this week's sessions
 - find_freeable {session_id}                    teachers who become eligible if one of their lower-severity rows is moved, with replacements for that row
 - find_slots {session_id, limit?}               other hours this week where somebody could teach this class (use it before concluding a class cannot run)
-- simulate_plan also accepts {kind: "reschedule", session_id, to_day, to_hour_ist} and {kind: "upgrade", sme_id, to_level}
+- find_merge_candidates {session_id, limit?}    other batches running the same topic that this class could be folded into for one hour
+- simulate_plan also accepts {kind: "reschedule", session_id, to_day, to_hour_ist}, {kind: "upgrade", sme_id, to_level},
+    {kind: "merge", session_id, into_session_id} and {kind: "cancel", session_id, reason}
 - list_teachers {}                              every teacher: id, name, subjects, topics, level, load — use this to turn a name into an id
 - report_unavailable {sme_id, days?: ["Wed"]}   mark a teacher unavailable for the rest of this run and get the sessions needing cover
 - simulate_plan {plan: [entry, ...]}            verdict per entry: ok | fairness_warning | breaks:<rule>.
@@ -216,7 +238,13 @@ def _parse(raw) -> tuple[str, dict | str]:
     return "error", 'response must contain either "action" or "final"'
 
 
-def _register(ctx: dict, body: dict, result: dict, seen: dict, slots_seen: dict, upgrades_seen: dict) -> None:
+LADDER_RUNGS = ("candidates", "merge", "slots")
+RUNG_LABEL = {"candidates": "no eligible teacher", "merge": "no batch to merge into",
+              "slots": "no other hour that works"}
+
+
+def _register(ctx: dict, body: dict, result: dict, seen: dict, slots_seen: dict, upgrades_seen: dict,
+              hosts_seen: dict, dead_ends: dict) -> None:
     """Record what this tool actually showed the model, so provenance can be checked later.
 
     Every tool that names a session and its options counts — the model legitimately read candidate names
@@ -252,6 +280,29 @@ def _register(ctx: dict, body: dict, result: dict, seen: dict, slots_seen: dict,
     for issue in (result.get("issues") or []):
         for f in (issue.get("freeable") or []):
             seen.setdefault(issue["session_id"], set()).add(f["sme_id"])
+
+    # Which rungs of the ladder this run has actually watched come back empty. A cancel is only
+    # allowed once all three have — the model may not skip to the bottom because it is quicker.
+    target = body.get("args", {}).get("session_id")
+    for b in blocks:
+        sid = b.get("session_id")
+        if not sid or sid not in rows:
+            continue
+        if "candidates" in b and not b["candidates"]:
+            dead_ends.setdefault(sid, set()).add("candidates")
+        if "merge_options" in b and not b["merge_options"]:
+            dead_ends.setdefault(sid, set()).add("merge")
+        if "slots" in b and not b["slots"]:
+            dead_ends.setdefault(sid, set()).add("slots")
+        hosts_seen.setdefault(sid, set()).update(
+            h["session_id"] for h in (b.get("merge_options") or []) if isinstance(h, dict) and h.get("session_id"))
+    if target and target in rows and "hosts" in result:
+        hosts_seen.setdefault(target, set()).update(
+            h["session_id"] for h in (result["hosts"] or []) if isinstance(h, dict) and h.get("session_id"))
+        if not result["hosts"]:
+            dead_ends.setdefault(target, set()).add("merge")
+    if target and target in rows and "slots" in result and not result["slots"]:
+        dead_ends.setdefault(target, set()).add("slots")
 
 
 def _fallback_plan(ctx: dict, affected: list[dict]) -> list[dict]:
@@ -294,6 +345,18 @@ def _provenance_error(a: dict, prov: dict, names: dict) -> str | None:
         if slot not in prov["slots"].get(a["session_id"], set()):
             return (f"{slot[0]} {slot[1]} was never returned by find_slots for {a['session_id']} — the copilot "
                     f"may only offer a slot it checked")
+    elif a["kind"] == "merge":
+        if a["into_session_id"] not in prov["hosts"].get(a["session_id"], set()):
+            return (f"{a['into_session_id']} was never returned by find_merge_candidates for "
+                    f"{a['session_id']} — the copilot may only merge into a host it checked")
+    elif a["kind"] == "cancel":
+        # The guard that matters most. A copilot that cancels a class it could have covered is worse
+        # than one that gives up, so this is enforced here and not left to the prompt.
+        proved = prov["dead_ends"].get(a["session_id"], set())
+        missing = [r for r in LADDER_RUNGS if r not in proved]
+        if missing:
+            return (f"{a['session_id']} was not shown to be beyond rescue — the copilot never confirmed "
+                    f"{' or '.join(RUNG_LABEL[r] for r in missing)}, and cancelling is the last resort")
     elif a["kind"] == "upgrade":
         allowed = prov["upgrades"].get(a.get("sme_id"))
         if not allowed:
@@ -376,6 +439,8 @@ def run_agent(ctx: dict, mode: str, sme_id: str | None = None, days: list[str] |
     seen: dict[str, set[str]] = {}          # session_id -> to_sme ids the model has actually been shown
     slots_seen: dict[str, set[tuple[str, str]]] = {}   # session_id -> (day, hour) find_slots returned
     upgrades_seen: dict[str, int] = {}      # sme_id -> the level a class actually requires of them
+    hosts_seen: dict[str, set[str]] = {}    # session_id -> hosts find_merge_candidates offered for it
+    dead_ends: dict[str, set[str]] = {}     # session_id -> ladder rungs this run watched come back empty
     called: set[str] = set()
     affected = T.get_affected_rows(ctx, sme_id, days)["rows"] if mode == "recovery" and sme_id else []
     goal = _goal(mode, ctx, sme_id, days, question)
@@ -444,7 +509,7 @@ def run_agent(ctx: dict, mode: str, sme_id: str | None = None, days: list[str] |
         if isinstance(result, dict) and "_ctx" in result:
             ctx = result.pop("_ctx")            # report_unavailable: the drop-out now applies to every later call
             affected = result["rows"]
-        _register(ctx, body, result, seen, slots_seen, upgrades_seen)
+        _register(ctx, body, result, seen, slots_seen, upgrades_seen, hosts_seen, dead_ends)
         transcript.append({"thought": raw.get("thought", ""), "tool": body["tool"], "args": body["args"],
                            "result_digest": _digest(result)})
         log.append(f"- {body['tool']}({json.dumps(body['args'])}) returned: "
@@ -452,7 +517,8 @@ def run_agent(ctx: dict, mode: str, sme_id: str | None = None, days: list[str] |
 
     notes: list[str] = []
     stray: list[str] = []
-    prov = {"seen": seen, "slots": slots_seen, "upgrades": upgrades_seen}
+    prov = {"seen": seen, "slots": slots_seen, "upgrades": upgrades_seen,
+            "hosts": hosts_seen, "dead_ends": dead_ends}
     if final is not None:
         answer = final["answer"].strip()
         plan, sim = _enforce(ctx, final["plan"], prov, affected, notes, stray)

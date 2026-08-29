@@ -6,6 +6,7 @@ Nothing here schedules. Every tool composes the existing Stage A/B/D functions f
 A `ctx` is the state one API call carries: {"week", "draft", "smes", "history", "unavailable"?}.
 `unavailable` = {"sme_id", "days": ["Wed", ...] | None} for a drop-out — rows still held by that
 teacher on those days count as uncovered, and that teacher is never offered as a candidate.
+`batches` is optional and only ever read for learner counts (the merge cap).
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from datetime import timedelta, timezone
 from . import stages as S
 
 STAGE_D_CODES = {"UNFILLED", "HARD_CONFLICT", "FAIRNESS_VIOLATION"}
-ACTION_KINDS = ("move", "reschedule", "upgrade")
+ACTION_KINDS = ("move", "reschedule", "upgrade", "cancel", "merge")
 SEVERITY = {"doubt": 0, "class": 1, "mock": 2}   # lowest first: disturb doubt sessions before classes before mocks
 DAY_ALIASES = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
 
@@ -28,11 +29,12 @@ class ToolError(ValueError):
 # ---------- ctx helpers ----------
 
 def make_ctx(week: str, draft: list[dict], smes: list[dict], history: list[dict] | None = None,
-             unavailable: dict | None = None) -> dict:
+             unavailable: dict | None = None, batches: list[dict] | None = None) -> dict:
     if unavailable and unavailable.get("days"):
         unavailable = {**unavailable, "days": [norm_day(d) for d in unavailable["days"]]}
     return {"week": week, "draft": draft, "smes": smes, "history": history or [],
-            "hist": S.build_hist(history or [], smes), "unavailable": unavailable}
+            "hist": S.build_hist(history or [], smes), "unavailable": unavailable,
+            "batches": batches or []}
 
 
 def norm_day(d: str) -> str:
@@ -75,6 +77,18 @@ def blocked(ctx: dict, sme_id: str | None, row: dict) -> bool:
     return bool(u and sme_id == u["sme_id"] and (not u.get("days") or _day(row) in u["days"]))
 
 
+def _learners(ctx: dict, batch_id: str) -> int:
+    b = next((x for x in (ctx.get("batches") or []) if x.get("id") == batch_id), None)
+    return int(b.get("learners") or 0) if b else 0
+
+
+def _combined_learners(ctx: dict, row: dict, host: dict) -> int:
+    """Everyone who would sit in the merged class — both cohorts, plus anyone already folded in."""
+    ids = {row["batch_id"], host["batch_id"], *(row.get("merged_batches") or []),
+           *(host.get("merged_batches") or [])}
+    return sum(_learners(ctx, b) for b in ids)
+
+
 def _brief(row: dict) -> dict:
     return {"session_id": row["session_id"], "batch_id": row["batch_id"], "subject": row["subject"],
             "sub_specialty": row.get("sub_specialty"), "type": row["type"], "day": _day(row),
@@ -108,7 +122,7 @@ def _final_candidates(ctx: dict, rows: list[dict], session_id: str, exclude: set
     the assigned rows (this session excluded), Stage B with this row's own load taken out."""
     sess = next(r for r in rows if r["session_id"] == session_id)
     sess = {**sess, "id": session_id}          # stage_a reads a session's `id`; rows carry `session_id`
-    assigned = [r for r in rows if r.get("sme_id")]
+    assigned = [r for r in S.live_rows(rows) if r.get("sme_id")]
     counts = Counter(r["sme_id"] for r in assigned)
     if sess.get("sme_id"):
         counts[sess["sme_id"]] -= 1
@@ -134,12 +148,15 @@ def roster(ctx: dict) -> list[dict]:
 def get_draft_summary(ctx: dict, week: str | None = None) -> dict:
     _check_week(ctx, week)
     rows = ctx["draft"]
+    live = S.live_rows(rows)
     flags = [f for r in rows for f in r.get("flags", [])]
     load = Counter(r["sme_id"] for r in rows if r.get("sme_id"))
     names = {s["id"]: s["name"] for s in ctx["smes"]}
     return {
         "week": ctx["week"], "total_sessions": len(rows),
-        "by_status": {"assigned": sum(1 for r in rows if r.get("sme_id")), "unfilled": sum(1 for r in rows if not r.get("sme_id")),
+        "by_status": {"assigned": sum(1 for r in rows if r.get("sme_id")), "unfilled": sum(1 for r in live if not r.get("sme_id")),
+                      "cancelled": sum(1 for r in rows if r.get("cancelled")),
+                      "merged": sum(1 for r in rows if r.get("merged_into")),
                       "auto": sum(1 for r in rows if r.get("stage") == "auto"), "llm": sum(1 for r in rows if r.get("stage") == "llm"),
                       "override": sum(1 for r in rows if r.get("stage") == "override")},
         "flags_by_severity": dict(Counter(f["severity"] for f in flags)),
@@ -150,7 +167,7 @@ def get_draft_summary(ctx: dict, week: str | None = None) -> dict:
                       "reason": next((f["reason"] for f in r.get("flags", []) if f["code"] == "UNFILLED"), None),
                       # the blockers as data, not prose: the model was reading names out of the sentence
                       "blocked": _final_candidates(ctx, rows, r["session_id"])[1]}
-                     for r in rows if not r.get("sme_id")],
+                     for r in live if not r.get("sme_id")],
         "load_by_sme": [{"sme_id": sid, "name": names.get(sid, sid), "sessions": n} for sid, n in load.most_common()],
         "unavailable": ctx.get("unavailable"),
     }
@@ -214,6 +231,8 @@ def _hour(value) -> int:
 def _kind_of(a: dict) -> str:
     if a.get("kind") in ACTION_KINDS:
         return a["kind"]
+    if a.get("into_session_id"):
+        return "merge"
     if a.get("to_day") or a.get("to_hour_ist"):
         return "reschedule"
     if a.get("to_level"):
@@ -252,6 +271,25 @@ def _norm_action(ctx: dict, a: dict, i: int) -> dict:
                 "to_hour_ist": f"{_hour(a['to_hour_ist']):02d}:00",
                 "from_day": S.WEEKDAYS[ist.weekday()], "from_hour_ist": f"{ist.hour:02d}:00",
                 "start_utc": _slot_utc(ctx, row, a["to_day"], a["to_hour_ist"]), "reason": reason}
+    if kind == "cancel":
+        if not a.get("session_id"):
+            raise ToolError(f"plan entry #{i + 1} must be {{kind: 'cancel', session_id, reason}}")
+        row = _row(ctx, a["session_id"])
+        # A cancellation is the one action learners hear about directly. Refusing it without a reason
+        # is cheaper than sending "your class is cancelled" with nothing after the dash.
+        if not reason.strip():
+            raise ToolError(f"plan entry #{i + 1}: a cancellation needs a `reason` — learners are told why")
+        return {"kind": "cancel", "session_id": row["session_id"], "batch_id": row["batch_id"],
+                "from_sme": row.get("sme_id"), "from_sme_name": row.get("sme_name"), "reason": reason}
+    if kind == "merge":
+        if not a.get("session_id") or not a.get("into_session_id"):
+            raise ToolError(f"plan entry #{i + 1} must be {{kind: 'merge', session_id, into_session_id, reason}}")
+        row, host = _row(ctx, a["session_id"]), _row(ctx, a["into_session_id"])
+        if row["session_id"] == host["session_id"]:
+            raise ToolError(f"plan entry #{i + 1}: a class cannot be merged into itself")
+        return {"kind": "merge", "session_id": row["session_id"], "into_session_id": host["session_id"],
+                "batch_id": row["batch_id"], "host_batch_id": host["batch_id"],
+                "from_sme": row.get("sme_id"), "reason": reason}
     if kind == "upgrade":
         if not a.get("sme_id") or not a.get("to_level"):
             raise ToolError(f"plan entry #{i + 1} must be {{kind: 'upgrade', sme_id, to_level, reason}}")
@@ -277,8 +315,19 @@ def _trial(ctx: dict, actions: list[dict]) -> tuple[list[dict], list[dict]]:
         if a["kind"] == "upgrade":
             by_sme[a["sme_id"]]["training_level"] = a["to_level"]
     for a in actions:
-        if a["kind"] == "reschedule":
+        if a["kind"] == "reschedule":       # before merges: a merge may realign the hour it needs
             by_id[a["session_id"]]["start_utc"] = a["start_utc"]
+    for a in actions:
+        if a["kind"] == "cancel":
+            by_id[a["session_id"]].update(cancelled={"reason": a["reason"], "by": "ops"},
+                                          sme_id=None, sme_name=None, stage=None)
+    for a in actions:
+        if a["kind"] == "merge":
+            r, host = by_id[a["session_id"]], by_id[a["into_session_id"]]
+            r.update(merged_into=host["session_id"], sme_id=None, sme_name=None, stage=None)
+            host["required_training_level"] = max(int(host.get("required_training_level", 1) or 1),
+                                                  int(r.get("required_training_level", 1) or 1))
+            host["merged_batches"] = sorted(set(host.get("merged_batches") or []) | {r["batch_id"]})
     for a in actions:
         if a["kind"] == "move":
             by_id[a["session_id"]].update(sme_id=a["to_sme"], sme_name=a["to_sme_name"], stage="override")
@@ -297,7 +346,8 @@ def simulate_plan(ctx: dict, moves: list[dict], week: str | None = None) -> dict
     if not isinstance(moves, list):
         raise ToolError("`moves` must be a list")
     actions = [_norm_action(ctx, m, i) for i, m in enumerate(moves)]
-    for kind, key in (("move", "session_id"), ("reschedule", "session_id"), ("upgrade", "sme_id")):
+    for kind, key in (("move", "session_id"), ("reschedule", "session_id"), ("upgrade", "sme_id"),
+                      ("cancel", "session_id"), ("merge", "session_id")):
         keys = [a[key] for a in actions if a["kind"] == kind]
         if len(set(keys)) != len(keys):
             raise ToolError(f"two {kind} entries target the same {key}")
@@ -341,6 +391,74 @@ def simulate_plan(ctx: dict, moves: list[dict], week: str | None = None) -> dict
             verdicts.append({**a, "verdict": verdict, "detail": detail, "score": None, "unblocks": unblocks})
             continue
 
+        if a["kind"] == "cancel":
+            original = _rows(ctx)[a["session_id"]]
+            row = by_id[a["session_id"]]
+            when = f"{_day(row)} {S.fmt_ist(S.parse_utc(row['start_utc']))[4:]}"
+            learners = _learners(ctx, row["batch_id"])
+            if not S.is_live(original):
+                verdict, detail = "breaks:already_dropped", f"{a['session_id']} is already off the schedule."
+            else:
+                # Cancelling is the bottom of the ladder. If the class still has a teacher, or somebody
+                # else could take it, say so loudly — but as a warning, not a break: ops may have a
+                # reason the engine cannot see.
+                held = original.get("sme_id") and not blocked(ctx, original["sme_id"], original)
+                still = [c for c in _final_candidates(ctx, ctx["draft"], a["session_id"])[0]
+                         if c["sme_id"] != original.get("sme_id")]
+                if held:
+                    verdict = "cover_warning"
+                    detail = (f"{original['sme_name']} is still assigned to this class — cancel is the "
+                              f"last resort.")
+                elif still:
+                    verdict = "cover_warning"
+                    detail = f"{still[0]['name']} can still take this class — cancel is the last resort."
+                else:
+                    detail = (f"{row['batch_id']} {row.get('sub_specialty') or row['type']} on {when} is "
+                              f"cancelled — {learners} learner(s) are told.")
+            verdicts.append({**a, "verdict": verdict, "detail": detail, "score": None, "learners": learners})
+            continue
+
+        if a["kind"] == "merge":
+            original, host_before = _rows(ctx)[a["session_id"]], _rows(ctx)[a["into_session_id"]]
+            row, host = by_id[a["session_id"]], by_id[a["into_session_id"]]
+            learners = _combined_learners(ctx, original, host_before)
+            when = f"{_day(host)} {S.fmt_ist(S.parse_utc(host['start_utc']))[4:]}"
+            eligible, _ = _final_candidates(trial_ctx, rows, a["into_session_id"])
+            if not S.is_live(original) or not S.is_live(host_before):
+                verdict, detail = "breaks:already_dropped", "One of those classes is already off the schedule."
+            elif original["subject"] != host_before["subject"]:
+                verdict, detail = "breaks:different_subject", (
+                    f"{original['batch_id']} is a {original['subject']} class and {host_before['batch_id']} is "
+                    f"{host_before['subject']} — they cannot sit in one room.")
+            elif (original.get("sub_specialty") or "") != (host_before.get("sub_specialty") or ""):
+                verdict, detail = "breaks:different_topic", (
+                    f"{original.get('sub_specialty') or original['type']} and "
+                    f"{host_before.get('sub_specialty') or host_before['type']} are different topics — merging "
+                    f"them would short-change one cohort.")
+            elif S.parse_utc(row["start_utc"]) != S.parse_utc(host["start_utc"]):
+                verdict, detail = "breaks:different_hour", (
+                    f"{original['batch_id']} runs {_day(row)} {S.fmt_ist(S.parse_utc(row['start_utc']))[4:]} and "
+                    f"{host_before['batch_id']} runs {when} — reschedule one into the other's slot in the same "
+                    f"plan, then they can merge.")
+            elif learners > S.MERGE_LEARNER_CAP:
+                verdict, detail = "breaks:too_many_learners", (
+                    f"{learners} learners across both batches is over the {S.MERGE_LEARNER_CAP} cap for one class.")
+            elif blocked(ctx, host_before.get("sme_id"), host_before) and not eligible:
+                verdict, detail = "breaks:unavailable", (
+                    f"{host_before.get('sme_name')} holds {host_before['batch_id']} and is the teacher reported "
+                    f"unavailable — merging into their class covers nothing.")
+            elif not eligible:
+                verdict, detail = "breaks:no_eligible_teacher", (
+                    f"Nobody can teach the merged class at level "
+                    f"{host['required_training_level']} on {when}.")
+            else:
+                detail = (f"{original['batch_id']} joins {host_before['batch_id']} for "
+                          f"{original.get('sub_specialty') or original['type']} at {when} — {learners} learners in "
+                          f"one class, taught by {eligible[0]['name']}.")
+            verdicts.append({**a, "verdict": verdict, "detail": detail, "score": None, "learners": learners,
+                             "eligible_after": [{"sme_id": c["sme_id"], "name": c["name"]} for c in eligible[:3]]})
+            continue
+
         if a["kind"] == "reschedule":
             row = by_id[a["session_id"]]
             d, h = S.WEEKDAYS.index(a["to_day"]), int(a["to_hour_ist"][:2])
@@ -378,9 +496,10 @@ def simulate_plan(ctx: dict, moves: list[dict], week: str | None = None) -> dict
     # Stage D is the guarantee: whatever Stage A said, a rejected or conflicting row is a break.
     S.stage_d_validate(rows, trial_smes, trial_ctx["hist"])
     for v in verdicts:
-        if v["kind"] == "upgrade":
-            continue
-        r = by_id[v["session_id"]]
+        if v["kind"] in ("upgrade", "cancel"):
+            continue          # neither leaves a staffable row for Stage D to have an opinion about
+        # a merge is judged on the class that survives it, not on the one that was folded away
+        r = by_id[v["into_session_id"] if v["kind"] == "merge" else v["session_id"]]
         hard = next((f for f in r["flags"] if f["code"] in ("UNFILLED", "HARD_CONFLICT")), None)
         if v["kind"] == "reschedule" and hard and hard["code"] == "UNFILLED" and not v["verdict"].startswith("breaks"):
             continue   # a rescheduled class is meant to be re-staffed by the next run; unfilled is expected
@@ -390,7 +509,7 @@ def simulate_plan(ctx: dict, moves: list[dict], week: str | None = None) -> dict
             v["verdict"] = "fairness_warning"
             v["detail"] = next(f["reason"] for f in r["flags"] if f["code"] == "FAIRNESS_VIOLATION")
     # a move can also knock out a row it did not name (the new teacher was already booked there)
-    moved = {v.get("session_id") for v in verdicts}
+    moved = {v.get("session_id") for v in verdicts} | {v.get("into_session_id") for v in verdicts}
     collateral = [{"session_id": r["session_id"], "code": f["code"], "reason": f["reason"]}
                   for r in rows if r["session_id"] not in moved
                   for f in r["flags"] if f["code"] in ("UNFILLED", "HARD_CONFLICT")
@@ -408,7 +527,9 @@ def simulate_plan(ctx: dict, moves: list[dict], week: str | None = None) -> dict
     uncovered = [_brief(r) for r in rows if u and blocked(ctx, r.get("sme_id"), r)]
     return {"verdicts": verdicts, "all_ok": all(not v["verdict"].startswith("breaks") for v in verdicts),
             "flag_diff": {"before": dict(before), "after": dict(after)},
-            "unfilled_after": [r["session_id"] for r in rows if not r.get("sme_id")],
+            "unfilled_after": [r["session_id"] for r in S.live_rows(rows) if not r.get("sme_id")],
+            "cancelled_after": [r["session_id"] for r in rows if r.get("cancelled")],
+            "merged_after": [r["session_id"] for r in rows if r.get("merged_into")],
             "collateral": collateral, "still_uncovered": uncovered}
 
 
@@ -419,8 +540,8 @@ def reflag_unfilled(rows: list[dict], smes: list[dict]) -> list[dict]:
     skipped, so re-validating a draft in place would quietly drop the flag that blocks publishing.
     This is the same Stage A + unfilled_reason pass run_pipeline does. Mutates and returns rows.
     """
-    assigned = [r for r in rows if r.get("sme_id")]
-    for row in rows:
+    assigned = [r for r in S.live_rows(rows) if r.get("sme_id")]
+    for row in S.live_rows(rows):
         if row.get("sme_id") or any(f["code"] == "UNFILLED" for f in row["flags"]):
             continue
         sess = {**row, "id": row["session_id"]}
@@ -447,9 +568,9 @@ def find_slots(ctx: dict, session_id: str, limit: int = 6, week: str | None = No
     _check_week(ctx, week)
     row = _row(ctx, session_id)
     ist = S.parse_utc(row["start_utc"]).astimezone(S.IST)
-    assigned = [r for r in ctx["draft"] if r.get("sme_id") and r["session_id"] != session_id]
+    assigned = [r for r in S.live_rows(ctx["draft"]) if r.get("sme_id") and r["session_id"] != session_id]
     busy_batch = {(S.parse_utc(r["start_utc"]).astimezone(S.IST).weekday(), S.parse_utc(r["start_utc"]).astimezone(S.IST).hour)
-                  for r in ctx["draft"] if r["batch_id"] == row["batch_id"] and r["session_id"] != session_id}
+                  for r in S.live_rows(ctx["draft"]) if r["batch_id"] == row["batch_id"] and r["session_id"] != session_id}
     days, hours = _grid(ctx)
     out = []
     for d in days:
@@ -473,6 +594,51 @@ def find_slots(ctx: dict, session_id: str, limit: int = 6, week: str | None = No
                      if out else "No slot this week has an eligible teacher.")}
 
 
+def find_merge_candidates(ctx: dict, session_id: str, limit: int = 4, week: str | None = None) -> dict:
+    """Classes this one could be folded into for a single hour, cheapest first.
+
+    When a teacher drops out and nobody else carries the topic, two cohorts sitting the same lesson in
+    the same hour is a better answer than cancelling one of them. A host must run the same subject and
+    the same topic; a host at a different hour is still offered, because a reschedule in the same plan
+    can align them — it just costs the learners a moved class, so it sorts last.
+    """
+    _check_week(ctx, week)
+    row = _row(ctx, session_id)
+    if not S.is_live(row):
+        return {"session_id": session_id, "hosts": [], "note": "This class is already off the schedule."}
+    when = S.parse_utc(row["start_utc"])
+    out = []
+    for host in S.live_rows(ctx["draft"]):
+        if host["session_id"] == session_id or host["batch_id"] == row["batch_id"]:
+            continue
+        if host["subject"] != row["subject"] or (host.get("sub_specialty") or "") != (row.get("sub_specialty") or ""):
+            continue
+        learners = _combined_learners(ctx, row, host)
+        if learners > S.MERGE_LEARNER_CAP:
+            continue
+        action = {"kind": "merge", "session_id": session_id, "into_session_id": host["session_id"],
+                  "batch_id": row["batch_id"], "host_batch_id": host["batch_id"],
+                  "from_sme": row.get("sme_id"), "reason": ""}
+        rows, trial_smes = _trial(ctx, [action])
+        trial_ctx = {**ctx, "draft": rows, "smes": trial_smes}
+        eligible, _ = _final_candidates(trial_ctx, rows, host["session_id"])
+        host_ist = S.parse_utc(host["start_utc"])
+        out.append({"session_id": host["session_id"], "batch_id": host["batch_id"], "day": _day(host),
+                    "time_ist": S.fmt_ist(host_ist), "same_hour": host_ist == when,
+                    "combined_learners": learners, "sme_id": host.get("sme_id"), "sme_name": host.get("sme_name"),
+                    "required_training_level_after": max(int(host.get("required_training_level", 1) or 1),
+                                                         int(row.get("required_training_level", 1) or 1)),
+                    "eligible_after": [{"sme_id": c["sme_id"], "name": c["name"]} for c in eligible[:3]],
+                    "has_teacher": bool(eligible)})
+    # same hour first (no learner is moved), then a host that can actually be staffed, then the smaller room
+    out.sort(key=lambda h: (not h["same_hour"], not h["has_teacher"], h["combined_learners"], h["session_id"]))
+    out = out[:max(1, int(limit))]
+    return {"session_id": session_id, "hosts": out,
+            "note": ("Offer one as {kind: 'merge', session_id, into_session_id}. A host at another hour needs a "
+                     "reschedule in the same plan." if out else
+                     "No other batch runs this topic — merging is not an option for this class.")}
+
+
 def get_issues(ctx: dict, codes: list[str] | None = None, limit: int = 8, week: str | None = None) -> dict:
     """Every flagged class with its fix material in ONE call: blockers, candidates, and — only when
     nothing is eligible — the swaps and slots that would work.
@@ -484,7 +650,7 @@ def get_issues(ctx: dict, codes: list[str] | None = None, limit: int = 8, week: 
     want = {c.upper() for c in codes} if codes else None
     # A class held by a teacher who has been reported unavailable carries no flag yet — it is still the
     # most urgent issue on the week, so it belongs here alongside the flagged rows.
-    rows = [r for r in ctx["draft"]
+    rows = [r for r in S.live_rows(ctx["draft"])
             if (not r.get("sme_id") or r.get("flags") or blocked(ctx, r.get("sme_id"), r))
             and (want is None or {f["code"] for f in r["flags"]} & want
                  or (blocked(ctx, r.get("sme_id"), r) and "UNCOVERED" in want))]
@@ -519,6 +685,7 @@ def get_issues(ctx: dict, codes: list[str] | None = None, limit: int = 8, week: 
                                   "has_replacement": f["has_replacement"]}
                                  for f in find_freeable(ctx, sid)["freeable"][:3]]
             issue["slots"] = find_slots(ctx, sid, limit=2)["slots"]
+            issue["merge_options"] = find_merge_candidates(ctx, sid, limit=2)["hosts"]
         issues.append(issue)
     return {"issues": issues, "total_flagged": len(rows), "shown": len(issues),
             "note": ("Everything you need to plan is here — simulate one plan covering the lot rather than "
@@ -590,6 +757,7 @@ REGISTRY = {
     "report_unavailable": (report_unavailable, ("sme_id",), ("days", "week")),
     "find_slots": (find_slots, ("session_id",), ("limit", "week")),
     "get_issues": (get_issues, (), ("codes", "limit", "week")),
+    "find_merge_candidates": (find_merge_candidates, ("session_id",), ("limit", "week")),
 }
 
 
@@ -608,7 +776,8 @@ def _plan_args(args: dict) -> dict:
         elif isinstance(val, dict):
             entries.append(val)
     if not any(k in args for k in PLAN_KEYS):
-        raise ToolError("simulate_plan needs `plan`: a list of {kind: move|reschedule|upgrade, ...} entries")
+        raise ToolError("simulate_plan needs `plan`: a list of "
+                        "{kind: move|reschedule|upgrade|merge|cancel, ...} entries")
     extra = [k for k in args if k not in PLAN_KEYS + ("week",)]
     if extra:
         raise ToolError(f"simulate_plan: unexpected {extra}; pass the entries in `plan`")

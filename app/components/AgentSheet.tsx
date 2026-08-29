@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { AgentMove, AgentRequest, AgentResult, AgentStep, DraftRow, SME } from "@/lib/types";
-import { isMove, isReschedule, isUpgrade } from "@/lib/types";
+import { isCancel, isMerge, isMove, isReschedule, isUpgrade } from "@/lib/types";
 import { istParts } from "@/lib/view";
 
 interface Props {
@@ -103,8 +103,9 @@ export function AnswerText({ text, muted }: { text: string; muted?: boolean }) {
 }
 
 /** One line per plan entry with its simulated verdict, then the copilot's answer.
- *  Three kinds read differently to a coordinator: who teaches it, when it runs, what someone is
- *  qualified for — so each is phrased in its own words rather than a generic "action". */
+ *  Five kinds read differently to a coordinator: who teaches it, when it runs, what someone is
+ *  qualified for, whose cohorts share it, and whether it runs at all — so each is phrased in its own
+ *  words rather than a generic "action". */
 export function PlanCard({ plan, answer, rows, smes, days, bare = false }: {
   plan: AgentMove[] | null; answer: string; rows: DraftRow[]; smes: SME[]; days: string[]; bare?: boolean;
 }) {
@@ -122,14 +123,18 @@ export function PlanCard({ plan, answer, rows, smes, days, bare = false }: {
     <div className={bare ? "" : "rounded-[16px] p-[13px_14px]"} style={bare ? undefined : { border: "1px solid var(--line)" }}>
       {(!bare || !!plan?.length) && <div className="label-caps mb-2">{heading}</div>}
       {plan?.map((a, i) => {
-        const pill = VERDICT_PILL[a.verdict === "fairness_warning" ? "fairness_warning" : "ok"];
+        const pill = VERDICT_PILL[a.verdict === "fairness_warning" || a.verdict === "cover_warning"
+          ? "fairness_warning" : "ok"];
         return (
           <div key={i} className="flex items-start gap-[10px] py-[7px]" style={{ borderTop: "1px solid var(--line-2)" }}>
             <span
               className="mt-[1px] shrink-0 rounded-[7px] px-[6px] py-[2px] text-[9.5px] font-bold uppercase"
-              style={{ background: "var(--brand-tint)", color: "var(--brand-deep)", letterSpacing: "0.04em" }}
+              style={isCancel(a)
+                ? { background: "var(--red-tint, #fbecea)", color: "var(--red-ink, #8c2f22)", letterSpacing: "0.04em" }
+                : { background: "var(--brand-tint)", color: "var(--brand-deep)", letterSpacing: "0.04em" }}
             >
-              {isReschedule(a) ? "move time" : isUpgrade(a) ? "level" : "teacher"}
+              {isReschedule(a) ? "move time" : isUpgrade(a) ? "level"
+                : isMerge(a) ? "merge" : isCancel(a) ? "cancel" : "teacher"}
             </span>
             <div className="min-w-0 flex-1 text-[12.5px] leading-[1.5]">
               {isReschedule(a) ? (
@@ -141,6 +146,17 @@ export function PlanCard({ plan, answer, rows, smes, days, bare = false }: {
                 <>
                   <b>{a.sme_name ?? name(a.sme_id)}</b> · training level {a.from_level} → <b>{a.to_level}</b>
                   {a.unblocks?.length ? <> · qualifies them for {a.unblocks.map(label).join(", ")}</> : null}
+                </>
+              ) : isMerge(a) ? (
+                <>
+                  {label(a.session_id)} → folded into <b>{a.host_batch_id}</b>&rsquo;s class
+                  {a.learners ? <> · {a.learners} learners in one room</> : null}
+                  {a.eligible_after?.length ? <> · {a.eligible_after[0].name} teaches it</> : null}
+                </>
+              ) : isCancel(a) ? (
+                <>
+                  {label(a.session_id)} → <b>cancelled</b>
+                  {a.learners ? <> · {a.learners} learners are told</> : null}
                 </>
               ) : (
                 <>
