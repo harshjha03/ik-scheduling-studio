@@ -38,7 +38,7 @@ export function publishLeaf(body: {
 }
 
 export function saveSchedule(week: string, draft: DraftRow[], extra: Record<string, unknown> = {}) {
-  return post<{ saved: string; rows: number }>("/api/schedule", { week, draft, ...extra });
+  return post<{ saved: string; rows: number; updated_at: string }>("/api/schedule", { week, draft, ...extra });
 }
 
 export interface SavedSchedule {

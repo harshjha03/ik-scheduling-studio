@@ -89,3 +89,23 @@ def test_a_partial_schedule_save_keeps_what_the_full_save_wrote(tmp_path, monkey
     api.put_schedule({"week": "2099-W01", "draft": [{"session_id": "x"}], "published": True})
     saved = api.get_schedule("2099-W01")
     assert saved["published"] is True and saved["stats"] == {"total_sessions": 1} and saved["flags"] == []
+
+
+def test_a_stale_client_is_refused_instead_of_overwriting(tmp_path, monkeypatch):
+    """Two coordinators: the second save must carry the updated_at it last saw, or be told (409)."""
+    monkeypatch.setenv("IK_DB_PATH", str(tmp_path / "t.db"))
+    from engine import store as store_mod
+    monkeypatch.setattr(store_mod, "_store", None)
+    first = api.put_schedule({"week": "2099-W02", "draft": [{"session_id": "a"}], "stats": {}})
+    assert first["updated_at"]
+    # tab 1 saves again on top of what it saw — fine
+    second = api.put_schedule({"week": "2099-W02", "draft": [{"session_id": "b"}], "expected_updated_at": first["updated_at"]})
+    # tab 2 still holds the first stamp: refused, and told when the other save happened
+    monkeypatch.setattr(store_mod, "now", lambda: "2099-01-01T00:00:00+00:00")      # a distinct stamp for the check
+    third = api.put_schedule({"week": "2099-W02", "draft": [{"session_id": "c"}], "expected_updated_at": second["updated_at"]})
+    with pytest.raises(HTTPException) as e:
+        api.put_schedule({"week": "2099-W02", "draft": [{"session_id": "z"}], "expected_updated_at": first["updated_at"]})
+    assert e.value.status_code == 409 and third["updated_at"] in e.value.detail
+    assert api.get_schedule("2099-W02")["draft"] == [{"session_id": "c"}]
+    # a client that never loaded the week (no stamp) is a first writer, not a stale one
+    assert api.put_schedule({"week": "2099-W02", "draft": [{"session_id": "d"}]})["updated_at"]

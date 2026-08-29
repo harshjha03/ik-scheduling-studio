@@ -76,6 +76,7 @@ const ALL_LEAVES: Record<string, boolean> = Object.fromEntries(
 
 /** QA-02: a failed write used to be indistinguishable from success. */
 const SAVE_FAILED = "Saved here, but the server copy failed — your changes may not survive a reload.";
+const SAVE_CONFLICT = "Someone else saved this week since you loaded it — reload to see their version before saving again.";
 
 export default function Page() {
   // Bundled seed data is the initial state, so first paint is identical with the API unreachable.
@@ -160,10 +161,19 @@ export default function Page() {
   }, []);
   // Every durable write goes through here: a failure is said out loud and stays on screen until a
   // later write succeeds, so a success toast that lands afterwards cannot hide it.
-  const [saveFailed, setSaveFailed] = useState(false);
+  const [saveFailed, setSaveFailed] = useState<string | null>(null);
   const persist = useCallback((p: Promise<unknown>) => {
-    p.then(() => setSaveFailed(false), () => { setSaveFailed(true); say(SAVE_FAILED); });
+    p.then(() => setSaveFailed(null), (e) => {
+      const msg = /→ 409/.test(String(e)) ? SAVE_CONFLICT : SAVE_FAILED;
+      setSaveFailed(msg); say(msg);
+    });
   }, [say]);
+  // The server's updated_at for each week we have seen; sent back with every save so a stale tab is
+  // refused (409) instead of silently overwriting what another coordinator saved.
+  const savedAt = useRef<Record<string, string>>({});
+  const save = useCallback((week: string, draft: DraftRow[], extra: Record<string, unknown> = {}) =>
+    saveSchedule(week, draft, { ...extra, expected_updated_at: savedAt.current[week] })
+      .then((r) => { savedAt.current[week] = r.updated_at; return r; }), []);
 
   useEffect(() => {
     // never claim a live source: the labels come from the server, and absence is shown as simulated
@@ -259,7 +269,7 @@ export default function Page() {
       setChanged(changedIds);
       setRuns((s) => ({ ...s, next: res }));
       // durable copy, so a refresh does not lose the coordinator's work
-      persist(saveSchedule(WEEKS.next.iso, res.draft, {
+      persist(save(WEEKS.next.iso, res.draft, {
         stats: res.stats, flags: res.flags, published: false, provenance, history: historyRecords,
       }));
       setApproved((a) => new Set([...a].filter((id) => !res.draft.some((r) => r.session_id === id))));
@@ -296,6 +306,7 @@ export default function Page() {
         setPublished({ current: true });
         // a saved draft wins over a fresh run — it holds the decisions ops already made
         const saved = await loadSchedule(WEEKS.next.iso).catch(() => null);
+        if (saved?.updated_at) savedAt.current[WEEKS.next.iso] = saved.updated_at;
         if (saved?.draft?.length && saved.stats) {
           if (!alive) return;
           if (saved.provenance) setProvenance(saved.provenance);
@@ -311,7 +322,7 @@ export default function Page() {
         if (!alive) return;
         nextRef.current = nxt.draft;
         setRuns((s) => ({ ...s, next: nxt }));
-        persist(saveSchedule(WEEKS.next.iso, nxt.draft, { stats: nxt.stats, flags: nxt.flags, published: false }));
+        persist(save(WEEKS.next.iso, nxt.draft, { stats: nxt.stats, flags: nxt.flags, published: false }));
       } catch (e) {
         say(String(e).slice(0, 160));
       } finally {
@@ -557,7 +568,7 @@ export default function Page() {
     setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
     setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
     setPublished((p) => ({ ...p, [week]: true }));
-    persist(saveSchedule(WEEKS[week].iso, rows, { published: true, stats: run?.stats, flags: run?.flags }));
+    persist(save(WEEKS[week].iso, rows, { published: true, stats: run?.stats, flags: run?.flags }));
     say(anyLive
       ? `Week published — ${sendSummary(list)}.`
       : `Week marked published — ${sendSummary(list)} simulated (no channel credentials yet).`);
@@ -966,7 +977,7 @@ export default function Page() {
       setDecisions((d) => ({ ...d, ...Object.fromEntries(out.override_log.map((e) => [e.session_id,
         { session_id: e.session_id, action: "override" as const, override_sme_id: e.to_sme_id }])) }));
       if (published.next) setPublished((p) => ({ ...p, next: false }));
-      persist(saveSchedule(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }));
+      persist(save(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }));
       getOverrides().then(setOverrideStats).catch(() => {});
       return true;
     } catch (e) {
@@ -1851,7 +1862,7 @@ export default function Page() {
       {saveFailed && (
         <div role="alert" className="fixed bottom-[70px] left-1/2 z-90 rounded-[12px] px-4 py-2 text-[12.5px]"
           style={{ transform: "translateX(-50%)", background: "var(--amber-tint)", color: "var(--amber-ink)", fontWeight: 550 }}>
-          {SAVE_FAILED}
+          {saveFailed}
         </div>
       )}
       <Toast text={toast} />

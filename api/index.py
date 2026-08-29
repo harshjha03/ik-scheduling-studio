@@ -238,14 +238,20 @@ def put_schedule(body: dict = Body(...)):
     if not body.get("week") or not isinstance(body.get("draft"), list):
         raise HTTPException(422, "`week` and `draft` are required")
     st = store()
-    payload = {k: v for k, v in body.items() if k != "week"}
+    payload = {k: v for k, v in body.items() if k not in ("week", "expected_updated_at")}
+    existing = st.load_schedule(body["week"]) or {}
+    # Two coordinators used to overwrite each other in silence. The client sends back the updated_at it
+    # last saw; a mismatch means someone else saved in between, and the loser is told instead of winning.
+    # ponytail: second-resolution stamps — two saves inside one second can still slip past each other
+    expected = body.get("expected_updated_at")
+    if expected and existing and existing.get("updated_at") != expected:
+        raise HTTPException(409, f"someone else saved this week at {existing['updated_at']} — reload to see their version before saving again")
     # A partial save must never drop what an earlier full save wrote. Publish sends {draft, published}
     # without stats, and the page refuses to restore a week that has no stats — so a plain replace
     # meant every reload after a publish discarded the coordinator's day and re-drafted.
-    existing = st.load_schedule(body["week"]) or {}
     merged = {**{k: v for k, v in existing.items() if k not in ("week", "updated_at")}, **payload}
-    st.save_schedule(body["week"], merged)
-    return {"saved": body["week"], "rows": len(body["draft"]), "storage": st.info()}
+    stamp = st.save_schedule(body["week"], merged)
+    return {"saved": body["week"], "rows": len(body["draft"]), "updated_at": stamp, "storage": st.info()}
 
 
 @app.get("/api/data")

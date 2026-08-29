@@ -153,14 +153,16 @@ class Store:
 
     # ---- schedule ----
 
-    def save_schedule(self, week: str, payload: dict) -> None:
-        blob = json.dumps(payload)
+    def save_schedule(self, week: str, payload: dict) -> str:
+        """Returns the new updated_at, which the client echoes back as its version on the next save."""
+        blob, stamp = json.dumps(payload), now()
         if self.driver == "postgres":
             self._run("INSERT INTO schedule (week, payload, updated_at) VALUES (?,?,?) "
                       "ON CONFLICT (week) DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at",
-                      (week, blob, now()))
+                      (week, blob, stamp))
         else:
-            self._run("INSERT OR REPLACE INTO schedule (week, payload, updated_at) VALUES (?,?,?)", (week, blob, now()))
+            self._run("INSERT OR REPLACE INTO schedule (week, payload, updated_at) VALUES (?,?,?)", (week, blob, stamp))
+        return stamp
 
     def load_schedule(self, week: str) -> dict | None:
         row = self._run("SELECT payload, updated_at FROM schedule WHERE week = ?", (week,), fetch="one")
