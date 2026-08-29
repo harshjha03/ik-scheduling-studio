@@ -34,12 +34,31 @@ DATASETS = ("sessions_next", "sessions_current", "smes", "smes_current", "histor
 _last_run: dict | None = None  # warm-instance cache only; the frontend is the source of truth
 
 
+REQUIRED = {"sessions": ("id", "start_utc", "duration_min", "subject"), "smes": ("id", "name", "training_level")}
+
+
+def _require_shape(body: dict) -> None:
+    """QA-04: the keys the engine indexes without .get(). Anything else missing degrades inside the
+    engine (an UNFILLED row, an empty pool); these four would have been a bare 500."""
+    for key in ("history", "overrides"):
+        if body.get(key) is not None and not isinstance(body[key], list):
+            raise HTTPException(422, f"`{key}` must be a list")
+    for key, fields in REQUIRED.items():
+        for i, item in enumerate(body[key]):
+            if not isinstance(item, dict):
+                raise HTTPException(422, f"`{key}[{i}]` must be an object")
+            missing = [f for f in fields if f not in item]
+            if missing:
+                raise HTTPException(422, f"`{key}[{i}]` is missing {missing}")
+
+
 @app.post("/api/run")
 def run(body: dict = Body(...)):
     global _last_run
     for key in ("sessions", "smes"):
         if not isinstance(body.get(key), list) or not body[key]:
             raise HTTPException(422, f"`{key}` must be a non-empty list")
+    _require_shape(body)
         # QA-03: the engine keys its working set by id, so two rows sharing one would collapse into a
         # single shared object — 42 counted, 41 scheduled, and one calendar event for two classes.
         dupes = sorted(k for k, n in Counter(x.get("id") for x in body[key] if isinstance(x, dict)).items() if n > 1)

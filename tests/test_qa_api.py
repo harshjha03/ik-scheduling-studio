@@ -62,3 +62,18 @@ def test_integrations_reports_no_model_when_no_llm_is_configured(monkeypatch):
     monkeypatch.setattr(api, "store", lambda: type("S", (), {"info": staticmethod(lambda: {"driver": "none"})})())
     llm = api.integrations()["llm"]
     assert llm == {"live": False, "provider": None, "model": None}
+
+
+@pytest.mark.parametrize("label,mutate,detail", [
+    ("history is a string", lambda b: b.update(history="oops"), "`history` must be a list"),
+    ("overrides is a dict", lambda b: b.update(overrides={"a": 1}), "`overrides` must be a list"),
+    ("session missing start_utc", lambda b: b["sessions"][0].pop("start_utc"), "`sessions[0]` is missing ['start_utc']"),
+    ("sme missing training_level", lambda b: b["smes"][2].pop("training_level"), "`smes[2]` is missing ['training_level']"),
+])
+def test_malformed_shapes_are_422_not_500(label, mutate, detail):
+    """QA-04. The four shapes scripts/qa_api_probe.py found returning a bare 500."""
+    body = {"sessions": [dict(s) for s in rd("sessions_next")], "smes": [dict(s) for s in rd("smes")], "llm": False}
+    mutate(body)
+    with pytest.raises(HTTPException) as e:
+        api.run(body)
+    assert (e.value.status_code, e.value.detail) == (422, detail), label
