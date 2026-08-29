@@ -45,6 +45,13 @@ def test_a_clean_payload_still_runs_and_every_draft_row_has_its_own_id():
     out = api.run({"sessions": sessions, "smes": smes, "history": rd("history"), "llm": False})
     ids = [r["session_id"] for r in out["draft"]]
     assert len(set(ids)) == len(ids) == len(sessions)
+    # QA-14: the spread travels with its decomposition, next to the number a reviewer reads first
+    st = out["stats"]
+    assert st["fairness_note_per_subject"]["DSA"] == (
+        f"DSA spread {st['fairness_spread_per_subject']['DSA']} — "
+        f"{st['fairness_inherited_per_subject']['DSA']} inherited from prior weeks, "
+        f"this week's assignments spread {st['fairness_assigned_per_subject']['DSA']}")
+    assert st["fairness_inherited_per_subject"]["DSA"] == 12 and st["fairness_spread_per_subject"]["DSA"] == 14
 
 
 def test_integrations_reports_no_model_when_no_llm_is_configured(monkeypatch):

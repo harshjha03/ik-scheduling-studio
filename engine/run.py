@@ -174,6 +174,10 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         spread[subject] = max(loads) - min(loads)
         inherited[subject] = max(past) - min(past)
         assigned_spread[subject] = max(mine) - min(mine)
+    # One sentence per subject: a bare "DSA: 14" against a ±2 band reads as a failure when most of it
+    # is history this week cannot touch. (Spreads do not add — each is its own max−min.)
+    note = {subj: f"{subj} spread {spread[subj]} — {inherited[subj]} inherited from prior weeks, "
+                  f"this week's assignments spread {assigned_spread[subj]}" for subj in spread}
     stats = {
         "total_sessions": len(draft_rows),
         "assigned": sum(1 for r in draft_rows if r["sme_id"]),
@@ -185,6 +189,7 @@ def run_pipeline(sessions: list[dict], smes: list[dict], history: list[dict] | N
         "fairness_spread_per_subject": spread,
         "fairness_inherited_per_subject": inherited,
         "fairness_assigned_per_subject": assigned_spread,
+        "fairness_note_per_subject": note,
         "llm": _llm_stats(items, llm),
     }
     return {"draft": draft_rows, "flags": flags, "stats": stats}

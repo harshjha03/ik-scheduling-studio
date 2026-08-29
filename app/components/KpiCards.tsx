@@ -18,6 +18,8 @@ interface Props {
   /** overrides as a share of assigned sessions, this week and the one before — the trust metric */
   overrideRate?: { rate: number | null; prev: number | null; overridden: number; assigned: number } | null;
   onOverrides: () => void;
+  /** the widest per-subject fairness spread, with how much of it the week inherited (QA-14) */
+  fairnessNote?: string | null;
 }
 
 function Card({ label, value, unit, sub, dot, tone = "plain", onClick, tip }: {
@@ -50,7 +52,7 @@ function Card({ label, value, unit, sub, dot, tone = "plain", onClick, tip }: {
 
 export default function KpiCards({
   rows, smes, batches, approved, leaveCount, workCount, unfilled, conflicts, advisory,
-  onBatches, onSmes, onShowAll, onWork, overrideRate, onOverrides,
+  onBatches, onSmes, onShowAll, onWork, overrideRate, onOverrides, fairnessNote,
 }: Props) {
   const k = kpis(rows, smes, batches, approved);
   return (
@@ -62,7 +64,7 @@ export default function KpiCards({
       />
       <Card
         label="Teachers active" value={k.activeTeachers} unit={`of ${k.totalTeachers}`} dot="#4a7fd0"
-        sub={`${leaveCount} on leave soon · ${k.workload} above the fairness band`}
+        sub={`${leaveCount} on leave soon · ${k.workload} above the fairness band${fairnessNote ? ` · ${fairnessNote}` : ""}`}
         tip="Open SME management" onClick={onSmes}
       />
       <Card

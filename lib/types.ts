@@ -209,6 +209,8 @@ export interface RunResult {
     fairness_inherited_per_subject?: Record<string, number>;
     /** the spread this week's assignment actually contributed */
     fairness_assigned_per_subject?: Record<string, number>;
+    /** "DSA spread 14 — 12 inherited from prior weeks, this week's assignments spread 5" */
+    fairness_note_per_subject?: Record<string, string>;
     llm: LlmStats;
   };
 }

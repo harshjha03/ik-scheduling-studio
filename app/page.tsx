@@ -319,6 +319,15 @@ export default function Page() {
 
   const run = runs[week];
   const rows = useMemo(() => run?.draft ?? [], [run]);
+  // The widest spread, and how much of it arrived with the week. Twelve of DSA's fourteen is seeded
+  // history no assignment this week can reach, and a bare number against a ±2 band hid that.
+  const fairnessNote = useMemo(() => {
+    const st = run?.stats;
+    const widest = Object.entries(st?.fairness_spread_per_subject ?? {}).sort((a, b) => b[1] - a[1])[0];
+    if (!widest) return null;
+    const inherited = st?.fairness_inherited_per_subject?.[widest[0]];
+    return `${widest[0]} spread ${widest[1]}${inherited == null ? "" : `, ${inherited} of it inherited`}`;
+  }, [run]);
   const smes = useMemo(() => smesFor(week), [smesFor, week]);
   const smeName = useCallback((id: string | null) => rosterFor("next").find((s) => s.id === id)?.name ?? id ?? "—", [rosterFor]);
   const me = rosterFor("next").find((s) => s.id === META.me)!;
@@ -1642,6 +1651,7 @@ export default function Page() {
               leaveCount={Object.keys(leave).length} workCount={work.length}
               unfilled={unfilledCount} conflicts={conflictCount}
               advisory={work.length - work.filter((w) => w.blocking).length}
+              fairnessNote={fairnessNote}
               onBatches={() => { setMod("batches"); setSheet(null); }}
               onSmes={() => { setMod("smes"); setSheet(null); }}
               onShowAll={() => { setTab("schedule"); setStatusOff({}); setBatchFilter("all"); }}
