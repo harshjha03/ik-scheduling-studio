@@ -597,7 +597,9 @@ async function features(ev, wait, settle, b) {
     await ev(`
       const c = cards().find((c) => /Unfilled/.test(norm(c.innerText)));
       c.click(); await sleep(500);
-      const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
+      // a pick that double-books a teacher is a HARD_CONFLICT and blocks publishing by design — take
+      // the first rule-breaker that is not already teaching at that hour
+      const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)) && !/busy with/.test(norm(x.innerText)));
       if (!pick.length) { if (sheet()) byPart('[role="dialog"] button', "Close").click(); return false; }
       pick[0].click();
       await sleep(700); return true;`);

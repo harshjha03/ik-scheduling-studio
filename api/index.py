@@ -242,7 +242,6 @@ def put_schedule(body: dict = Body(...)):
     existing = st.load_schedule(body["week"]) or {}
     # Two coordinators used to overwrite each other in silence. The client sends back the updated_at it
     # last saw; a mismatch means someone else saved in between, and the loser is told instead of winning.
-    # ponytail: second-resolution stamps — two saves inside one second can still slip past each other
     expected = body.get("expected_updated_at")
     if expected and existing and existing.get("updated_at") != expected:
         raise HTTPException(409, f"someone else saved this week at {existing['updated_at']} — reload to see their version before saving again")

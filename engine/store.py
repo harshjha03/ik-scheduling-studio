@@ -73,7 +73,9 @@ MIGRATIONS = ["ALTER TABLE calendar_event ADD COLUMN body_hash TEXT"]
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Microseconds, not seconds: `updated_at` doubles as the saved week's version, and two coordinators
+    # saving inside the same second must not be handed the same stamp.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 class Store:
