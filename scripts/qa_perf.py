@@ -73,13 +73,22 @@ def main():
     sessions, smes, history = rd("sessions_next"), rd("smes"), rd("history")
 
     header(f"1. POST /api/run — pipeline scaling (in-process, llm disabled, {RUNS} runs each)")
-    print(f"{'sessions':>9} {'median':>9} {'min':>9} {'max':>9}   assigned/unfilled")
-    for n in (41, 100, 250, 500, 1000):
-        pool = [dict(sessions[i % len(sessions)], id=f"P{i:05d}") for i in range(n)]
-        med, lo, hi = median_of(lambda: run_pipeline(pool, smes, history, [], llm_enabled=False))
-        res = run_pipeline(pool, smes, history, [], llm_enabled=False)
-        print(f"{n:>9} {med:>8.3f}s {lo:>8.3f}s {hi:>8.3f}s   "
-              f"{res['stats']['assigned']}/{res['stats']['unfilled']}")
+    # Two rosters. With the seed's 16 SMEs fixed, everything past ~95 sessions is rejected by Stage A,
+    # so that table measures elimination throughput. Scaling the roster with the sessions keeps most
+    # rows matched, which is where Stage B's per-session pool walk (sessions × pool) actually shows.
+    print(f"{'sessions':>9} {'smes':>5} {'median':>9} {'min':>9} {'max':>9}   assigned/unfilled")
+    for scale_roster in (False, True):
+        print(f"  -- roster {'scaled with the sessions' if scale_roster else 'fixed at the seed 16'} --")
+        for n in (41, 100, 250, 500, 1000):
+            pool = [dict(sessions[i % len(sessions)], id=f"P{i:05d}") for i in range(n)]
+            copies = max(1, round(n / len(sessions))) if scale_roster else 1
+            roster = [dict(m, id=f"{m['id']}-c{k}" if k else m["id"], name=f"{m['name']} {k}" if k else m["name"])
+                      for k in range(copies) for m in smes]
+            hist = history + [dict(h, sme_id=f"{h['sme_id']}-c{k}") for k in range(1, copies) for h in history]
+            med, lo, hi = median_of(lambda: run_pipeline(pool, roster, hist, [], llm_enabled=False))
+            res = run_pipeline(pool, roster, hist, [], llm_enabled=False)
+            print(f"{n:>9} {len(roster):>5} {med:>8.3f}s {lo:>8.3f}s {hi:>8.3f}s   "
+                  f"{res['stats']['assigned']}/{res['stats']['unfilled']}")
 
     header(f"2. Calendar publish — 41 rows, injected API sleeping {LATENCY * 1000:.0f}ms per call")
     os.environ.update({"GOOGLE_SERVICE_ACCOUNT_JSON": '{"type":"service_account"}',
