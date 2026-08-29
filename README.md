@@ -26,7 +26,8 @@ app/, lib/            Next.js (App Router) + Tailwind dashboard, implemented fro
 
 ## The dashboard
 
-One page, three personas via the sidebar switcher (no auth — the persona is picked from the data):
+One page, three personas via the sidebar switcher (no auth — the persona is picked from the data, and
+every write endpoint is public; see *Deploy*):
 
 - **Ops coordinator** — *Dashboard* (clickable KPI cards, week calendar, work items, class sheet,
   overrides tab), *SME management* (searchable table with capacity filters — "can fill an open
@@ -120,6 +121,15 @@ vercel --prod
 `vercel.json` pins `framework: nextjs`, rewrites `/api/(.*)` → `/api/index` so the single FastAPI
 app in `api/index.py` handles every `/api/*` route, and sets `maxDuration: 120` for the LLM call.
 Python deps come from `requirements.txt`. Verify: `curl -X POST https://<app>/api/run -d @payload.json`.
+
+**There is no authentication, and every write is public.** That is a deliberate prototype scope
+decision, not an oversight: the persona switcher picks a role from the data, and nothing checks who is
+calling. Concretely, `/api/run`, `/api/approvals`, `/api/schedule`, `/api/publish`, `/api/sheets/push`,
+`/api/data/{name}`, `/api/data/reset`, `/api/agent/apply` and `/api/availability/sync` accept
+unauthenticated `POST`s — anyone with the deployed URL can overwrite the saved week, reset the datasets,
+or trigger a calendar publish or a Sheets push wherever credentials are configured. Keep real
+credentials off any deployment whose URL is shared beyond the people who should be able to do that.
+A login wall would sit between a reviewer and the demo, so auth is left for a production build.
 
 **What you have to provision**, in the order it stops mattering if you skip it:
 
