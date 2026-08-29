@@ -98,7 +98,7 @@ export default function ImportSheet({
               className="relative mt-auto block cursor-pointer rounded-[16px] p-[18px_14px] text-center"
               style={{ border: "1.5px dashed var(--brand-ring)", background: "#F4F8FD", marginTop: 12 }}
             >
-              <span className="text-[22px] leading-none">📄</span>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--brand-deep)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="mx-auto"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M9 13h6M9 17h6" /></svg>
               <span className="mt-[7px] block text-[12.5px] font-bold">{dropTitle}</span>
               <span className="mt-[3px] block text-[11.5px]" style={{ color: "var(--muted)" }}>{dropSub}</span>
               <input
@@ -126,7 +126,7 @@ export default function ImportSheet({
               </div>
               <div className="mt-[14px] flex flex-1 flex-col items-center justify-center rounded-[16px] p-[18px_14px] text-center"
                 style={{ border: "1.5px dashed var(--brand-ring)", background: "#F4F8FD" }}>
-                <span className="text-[22px] leading-none" aria-hidden>📊</span>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--brand-deep)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="mx-auto"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10h16M4 15h16M10 4v16" /></svg>
                 <span className="mt-[7px] block text-[12.5px] font-bold">No file needed — we read the tab</span>
                 <span className="mt-[3px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>
                   {sheetLive
