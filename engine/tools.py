@@ -191,7 +191,7 @@ def get_sme(ctx: dict, sme_id: str, week: str | None = None) -> dict:
     return {"sme_id": sme["id"], "name": sme["name"], "subjects": S.sme_subjects(sme), "topics": S.sme_topics(sme),
             "training_level": sme["training_level"], "timezone": sme.get("timezone"),
             "availability": [{"weekday": w["weekday"], "start_utc": w["start_utc"], "end_utc": w["end_utc"]} for w in sme.get("weekly_availability", [])],
-            "preference_notes": sme.get("preference_notes", ""), "preferred_per_week": sme.get("preferred"),
+            "preference_notes": str(sme.get("preference_notes") or "")[:500], "preferred_per_week": sme.get("preferred"),
             "past_load_3w": S.past_load(ctx["hist"].get(sme_id, [])),
             "this_week": [_brief(r) for r in sorted(mine, key=lambda r: r["start_utc"])], "this_week_count": len(mine)}
 

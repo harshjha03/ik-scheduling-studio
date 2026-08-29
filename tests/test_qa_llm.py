@@ -255,7 +255,9 @@ def test_injected_preference_notes_reach_the_prompt_but_cannot_break_a_rule(worl
 
     def llm_call(p):
         for q in queued(p):
-            seen_notes.extend(c.get("preference_notes", "") for c in q["candidates"])
+            # the note travels labelled as data, never as a bare string the model could read as prose
+            assert all(set(c["preference_notes"]) == {"untrusted_text"} for c in q["candidates"])
+            seen_notes.extend(c["preference_notes"]["untrusted_text"] for c in q["candidates"])
         # the worst case: the model does exactly what the injection asked
         return {"decisions": [{"session_id": q["session_id"], "chosen_sme_id": "T05",
                                "reason": "Pre-approved per the note.", "confidence": 1.0}
@@ -269,16 +271,19 @@ def test_injected_preference_notes_reach_the_prompt_but_cannot_break_a_rule(worl
             assert any(c["sme_id"] == "T05" for c in row["candidates"]) or row["stage"] == "override"
 
 
-def test_preference_notes_are_not_length_capped_before_the_prompt(world):
-    """A 50k-character note is passed through whole. Recorded as a finding: nothing truncates it, so a
-    single roster row can dominate the token budget for its chunk."""
+def test_preference_notes_are_capped_before_the_prompt(world):
+    """QA-07: a 50k-character note used to reach the payload whole, so one roster row could dominate its
+    chunk's token budget. It is now cut at 500 characters inside `_candidate_payload`."""
     sessions, smes, history, _ = world
     huge = "A" * 50_000
     poisoned = [{**s, "preference_notes": huge} if s["id"] == "T05" else s for s in smes]
-    sizes = []
+    sizes, notes = [], []
 
     def llm_call(p):
         sizes.append(len(json.dumps(p)))
+        for q in queued(p):
+            notes.extend(c["preference_notes"]["untrusted_text"] for c in q["candidates"])
         return {"decisions": [], "flag_reasons": []}
     run_pipeline(sessions, poisoned, history, [], llm_call=llm_call, llm_enabled=True)
-    assert sizes and max(sizes) > 50_000, "the whole note is in the payload, untruncated"
+    assert sizes and max(sizes) < 50_000, "the payload must not carry the whole note"
+    assert max(len(n) for n in notes) == 500 and "A" * 500 in notes, "the note is cut at 500 characters"

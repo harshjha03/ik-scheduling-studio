@@ -18,7 +18,10 @@ def _base_row(session: dict) -> dict:
 
 def _candidate_payload(cand: dict, sme: dict, hist: dict) -> dict:
     weeks = hist.get(sme["id"], [])
-    return {**cand, "preference_notes": sme.get("preference_notes", ""),
+    # QA-01/QA-07: free text a teacher (or an imported CSV/Sheet) wrote. Capped so one row cannot eat
+    # a chunk's budget, and wrapped so its status as data — not instruction — is visible in the payload.
+    note = str(sme.get("preference_notes") or "")[:500]
+    return {**cand, "preference_notes": {"untrusted_text": note},
             "training_level": sme["training_level"],
             "per_topic_rating": (weeks[-1].get("per_topic_rating") if weeks else {}) or {},
             "recent_batches": sorted(S.taught_batches(weeks))}

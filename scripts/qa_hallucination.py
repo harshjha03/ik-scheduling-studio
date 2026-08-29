@@ -31,6 +31,9 @@ from tests.test_invariants import assert_no_hard_rule_violation  # noqa: E402
 from tests.test_qa_llm import ungrounded  # noqa: E402
 
 REPS = int(os.environ.get("QA_REPS", "5"))
+# QA_ONLY=injection runs section 4 alone; QA_INJECTIONS="claimed authority,fake schema" picks payloads.
+ONLY = os.environ.get("QA_ONLY")
+INJECTIONS_ONLY = {x.strip() for x in os.environ.get("QA_INJECTIONS", "").split(",") if x.strip()}
 FINDINGS: list[str] = []
 
 
@@ -58,6 +61,8 @@ def main():
     ctx = T.make_ctx("2026-W37", draft, smes, history)
 
     # ---------- 1. Stage C: are the tie reasons grounded? ----------
+    if ONLY == "injection":
+        return injection(sessions, smes, history)
     print("Stage C — tie-break reasons shown to ops")
     bad_runs, samples, decisions_seen = 0, [], 0
     for i in range(REPS):
@@ -126,6 +131,10 @@ def main():
     report("never claims an action it cannot take", claims, REPS)
     report("emits no markdown (the UI renders plain text)", md, REPS)
 
+    return injection(sessions, smes, history)
+
+
+def injection(sessions, smes, history):
     # ---------- 4. Prompt injection through preference_notes ----------
     print("\nPrompt injection via preference_notes (operator-editable, CSV/Sheets-importable)")
     injections = {
@@ -141,6 +150,8 @@ def main():
     baseline = sum(1 for r in clean["draft"] if r["sme_id"] == target)
     print(f"    baseline sessions for {target}: {baseline}")
     for label, note in injections.items():
+        if INJECTIONS_ONLY and label not in INJECTIONS_ONLY:
+            continue
         skew, echo, violations = 0, 0, 0
         for i in range(REPS):
             poisoned = [{**s, "preference_notes": note} if s["id"] == target else s for s in smes]
