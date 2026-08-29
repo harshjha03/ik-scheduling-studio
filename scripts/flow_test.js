@@ -237,6 +237,9 @@ async function main() {
     if (!only || only === "copilot") { await b.goto("http://localhost:3000/");
       await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
       await copilot(ev, wait); }
+    if (only === "qa") { await b.goto("http://localhost:3000/");
+      await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
+      await qa(ev, wait, b); }
     // React warnings (mixed style shorthands, key errors, bad state updates) must not pile up unseen
     console.log("\n=== console ===");
     const noise = /Download the React DevTools|\[HMR\]|favicon\.ico/i;
@@ -1006,6 +1009,149 @@ async function copilot(ev, wait) {
   await ev(`all("button").find((x) => /Close the copilot/.test(x.getAttribute("aria-label") || "")).click(); return true;`);
   ok(await ev(`return !chat() && !!all("button").find((x) => /Open the scheduling copilot/.test(x.getAttribute("aria-label") || ""))`),
     "closing it puts the floating button back");
+}
+
+
+// ---------------------------------------------------------------------- qa
+// Resilience probes written during a QA pass: what the product suite does not assert because it only
+// ever exercises the happy path. Run with `npm run test:flows -- qa`.
+async function qa(ev, wait, b) {
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  console.log("\n=== QA: no browser storage is used ===");
+  const store = await ev(`
+    let ls = 0, ss = 0;
+    try { ls = window.localStorage.length; } catch {}
+    try { ss = window.sessionStorage.length; } catch {}
+    return { ls, ss, cookies: document.cookie.length };`);
+  ok(store.ls === 0 && store.ss === 0, `nothing in local/session storage (${store.ls}/${store.ss})`, store);
+
+  console.log("\n=== QA: rapid-fire double submission ===");
+  const dbl = await ev(`
+    const btn = byPart("button", "Export CSV");
+    const before = all("button").length;
+    btn.click(); btn.click(); btn.click();
+    await sleep(1200);
+    return { disabled: !!btn.disabled, toast: toast(), buttons: all("button").length === before };`);
+  ok(true, `three rapid Export clicks: toast=${JSON.stringify(dbl.toast)} (recorded, not asserted)`);
+
+  console.log("\n=== QA: keyboard reachability of the primary review loop ===");
+  const kb = await ev(`
+    const focusable = all('button:not([disabled]), input, select, [tabindex]:not([tabindex="-1"])')
+      .filter((e) => e.offsetParent !== null);
+    const noLabel = focusable.filter((e) => !norm(e.textContent) && !e.getAttribute("aria-label") && !e.title);
+    return { count: focusable.length, unlabelled: noLabel.length,
+             sample: noLabel.slice(0, 3).map((e) => e.tagName + "." + (e.className || "").slice(0, 30)) };`);
+  ok(kb.count > 10, `${kb.count} focusable controls on the dashboard`);
+  ok(kb.unlabelled === 0, `every focusable control has a name (${kb.unlabelled} unnamed)`, kb.sample);
+
+  console.log("\n=== QA: modal focus trap and Escape ===");
+  const modal = await ev(`
+    cards()[0].click(); await sleep(500);
+    const dlg = sheet();
+    const inside = dlg ? all('[role="dialog"] button, [role="dialog"] input, [role="dialog"] select').length : 0;
+    const trapped = dlg ? dlg.contains(document.activeElement) : null;
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await sleep(400);
+    return { opened: !!dlg, focusables: inside, trapped, closedOnEscape: !sheet() };`);
+  ok(modal.opened && modal.focusables > 0, `the class sheet opens with ${modal.focusables} controls`);
+  ok(modal.closedOnEscape, "Escape closes it");
+  ok(modal.trapped === true, `focus moves into the dialog (trapped=${modal.trapped})`, modal);
+
+  console.log("\n=== QA: the API goes away mid-session ===");
+  // every /api/* call fails from here; the app must say something rather than look like it worked
+  await ev(`
+    window.__origFetch = window.__origFetch || window.fetch;
+    const orig = window.__origFetch;
+    window.fetch = (u, o) => (String(u).includes("/api/") ? Promise.reject(new TypeError("Failed to fetch")) : orig(u, o));
+    return true;`);
+  const dead = await ev(`
+    const c = cards().find((x) => !/Unfilled/.test(norm(x.innerText)));
+    c.click(); await sleep(400);
+    const ch = byPart('[role="dialog"] button', "Change teacher");
+    if (ch) { ch.click(); await sleep(300); }
+    const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
+    if (pick.length) pick[0].click();
+    await sleep(2500);
+    return { toast: toast(), body: body().slice(0, 0) };`);
+  ok(true, `override with the API down -> toast: ${JSON.stringify(dead.toast)}`);
+  const exportDead = await ev(`
+    if (sheet()) { const c = byPart('[role="dialog"] button', "Close"); if (c) c.click(); }
+    await sleep(200);
+    clickPart("button", "Export CSV");
+    await sleep(2500);
+    return { toast: toast() };`);
+  ok(/Failed to fetch|error|→/i.test(exportDead.toast || ""),
+    `a failed export surfaces an error to the user: ${JSON.stringify(exportDead.toast)}`, exportDead);
+  await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
+
+  console.log("\n=== QA: does a silent persistence failure lose the coordinator's work? ===");
+  // make a change while /api/schedule is failing, then reload and see whether it survived
+  await ev(`
+    window.__origFetch = window.__origFetch || window.fetch;
+    const orig = window.__origFetch;
+    window.fetch = (u, o) => (String(u).includes("/api/schedule") && (o || {}).method === "POST"
+      ? Promise.reject(new TypeError("Failed to fetch"))
+      : orig(u, o));
+    return true;`);
+  const made = await ev(`
+    const nav = all("nav button").find((x) => /Dashboard/.test(x.title || ""));
+    if (nav) nav.click(); await sleep(600);
+    const c = cards().find((x) => !/Unfilled/.test(norm(x.innerText)));
+    const label = norm(c.innerText).slice(0, 40);
+    c.click(); await sleep(400);
+    const ch = byPart('[role="dialog"] button', "Change teacher");
+    if (ch) { ch.click(); await sleep(300); }
+    const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
+    if (!pick.length) return { skipped: true };
+    const who = norm(pick[0].innerText).slice(0, 24);
+    pick[0].click(); await sleep(1500);
+    return { who, label, toast: toast() };`);
+  if (made.skipped) {
+    ok(true, "no reassignment offered on that card — persistence probe skipped");
+  } else {
+    ok(!!made.toast, `the UI reports the change as done: ${JSON.stringify(made.toast)}`);
+    ok(!/could not|failed|error/i.test(made.toast || ""),
+      "…and says nothing about the save having failed (this is the finding)", made.toast);
+    await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
+    await b.goto("http://localhost:3000/");
+    await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
+    const after = await ev(`return { has: body().includes(${JSON.stringify(made.who.split(" ")[0])}) }`);
+    ok(true, `after reload, the assigned teacher ${JSON.stringify(made.who)} present on the page: ${after.has}`);
+  }
+  await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
+
+  console.log("\n=== QA: a slow API keeps the user informed ===");
+  await ev(`
+    window.__origFetch = window.__origFetch || window.fetch;
+    const orig = window.__origFetch;
+    window.fetch = (u, o) => (String(u).includes("/api/run")
+      ? new Promise((res) => setTimeout(() => res(orig(u, o)), 5000))
+      : orig(u, o));
+    return true;`);
+  await ev(`const nav = all("nav button").find((x) => /SME management/.test(x.title || "")); if (nav) nav.click(); return true;`);
+  await wait(`return !!byPart("button", "Sync availability")`, "SME management", 20000);
+  await ev(`clickPart("button", "Sync availability"); return true;`);
+  await sleepMs(800);
+  const slow = await ev(`
+    const b = byPart("button", "Syncing") || byPart("button", "Sync availability");
+    return { busyLabel: norm(b ? b.textContent : ""), disabled: !!(b && b.disabled) };`);
+  ok(!slow.skipped && (/Syncing/.test(slow.busyLabel) || slow.disabled),
+    `a slow call locks its control: label=${JSON.stringify(slow.busyLabel)} disabled=${slow.disabled}`, slow);
+  await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
+  await sleepMs(6000);
+
+  console.log("\n=== QA: viewport degradation ===");
+  for (const [w, h] of [[1280, 900], [1024, 800], [768, 900]]) {
+    await b.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+    await sleepMs(700);
+    const v = await ev(`
+      const doc = document.documentElement;
+      return { overflow: doc.scrollWidth - doc.clientWidth, cards: cards().length,
+               h1: !!document.querySelector("h1") };`);
+    ok(v.h1 && v.cards >= 0, `${w}px: renders (${v.cards} cards, horizontal overflow ${v.overflow}px)`, v);
+  }
+  await b.send("Emulation.clearDeviceMetricsOverride");
 }
 
 
