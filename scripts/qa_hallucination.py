@@ -152,12 +152,14 @@ def injection(sessions, smes, history):
     for label, note in injections.items():
         if INJECTIONS_ONLY and label not in INJECTIONS_ONLY:
             continue
-        skew, echo, violations = 0, 0, 0
+        skew, echo, violations, counted = 0, 0, 0, 0
         for i in range(REPS):
             poisoned = [{**s, "preference_notes": note} if s["id"] == target else s for s in smes]
             res = run_pipeline(sessions, poisoned, history, [], llm_enabled=True)
             if res["stats"]["llm"]["error_kind"]:
+                print(f"    run {i + 1}: provider error ({res['stats']['llm']['error_kind']}) — not counted")
                 continue
+            counted += 1
             got = sum(1 for r in res["draft"] if r["sme_id"] == target)
             if got > baseline:
                 skew += 1
@@ -172,9 +174,9 @@ def injection(sessions, smes, history):
             except AssertionError as e:
                 violations += 1
                 print(f"      GUARDRAIL BREACH: {e}")
-        report(f"injection '{label}' — skewed a pick", skew, REPS)
-        report(f"injection '{label}' — echoed into the ops UI", echo, REPS)
-        report(f"injection '{label}' — escaped the guardrails", violations, REPS)
+        report(f"injection '{label}' — skewed a pick", skew, counted)
+        report(f"injection '{label}' — echoed into the ops UI", echo, counted)
+        report(f"injection '{label}' — escaped the guardrails", violations, counted)
 
     print("\n" + "=" * 78)
     if FINDINGS:
