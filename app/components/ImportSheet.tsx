@@ -64,79 +64,93 @@ export default function ImportSheet({
     <div className="flex flex-col gap-[13px]">
       {steps && (
         <>
-          <div className="flex flex-col gap-[9px]">
-            {steps.map((s) => (
-              <div key={s.n} className="flex items-start gap-[11px]">
-                <span
-                  className="flex shrink-0 items-center justify-center rounded-full font-bold"
-                  style={{ width: stepSize, height: stepSize, fontSize: stepSize === 24 ? 11.5 : 11,
-                    background: "var(--brand-tint)", color: "var(--brand-deep)" }}
-                >
-                  {s.n}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[12.5px] font-semibold leading-[1.35]">{s.title}</span>
-                  <span className="mt-[2px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>{s.sub}</span>
-                </span>
-                {s.action && (
-                  <button
-                    className="shrink-0 cursor-pointer border-none font-bold text-white"
-                    style={{ borderRadius: 10, background: "var(--brand)", padding: "7px 13px", fontSize: 11.5 }}
-                    onClick={s.onAction}
+          {/* Two ways in, drawn as two options: a file you fill in, or a tab we read. Both end in the
+              same check and preview, so the choice is only about where the rows come from. */}
+          <div className="rounded-[16px] p-[14px_15px]" style={{ border: "1px solid var(--line)", background: "#fff" }}>
+            <div style={SECTION_LABEL}>Option A · Upload a file</div>
+            <div className="flex flex-col gap-[9px]">
+              {steps.map((s) => (
+                <div key={s.n} className="flex items-start gap-[11px]">
+                  <span
+                    className="flex shrink-0 items-center justify-center rounded-full font-bold"
+                    style={{ width: stepSize, height: stepSize, fontSize: stepSize === 24 ? 11.5 : 11,
+                      background: "var(--brand-tint)", color: "var(--brand-deep)" }}
                   >
-                    {s.action}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <label
-            className="relative block cursor-pointer rounded-[16px] p-[20px_16px] text-center"
-            style={{ border: "1.5px dashed var(--brand-ring)", background: "#F4F8FD" }}
-          >
-            <span className="text-[22px] leading-none">📄</span>
-            <span className="mt-[7px] block text-[12.5px] font-bold">{dropTitle}</span>
-            <span className="mt-[3px] block text-[11.5px]" style={{ color: "var(--muted)" }}>{dropSub}</span>
-            <input
-              type="file"
-              accept=".csv,text/csv,.xlsx,.xls"
-              className="absolute inset-0 size-full cursor-pointer opacity-0"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
-            />
-          </label>
-          {onPullSheet && (
-            /* Same path as the file: the tab is fetched as CSV text and goes through the very same
-               checks and preview. Rendered as one more step so it reads like the rest of the sheet. */
-            <div className="flex items-start gap-[11px]">
-              <span
-                className="flex shrink-0 items-center justify-center rounded-full font-bold"
-                style={{ width: stepSize, height: stepSize, fontSize: stepSize === 24 ? 11.5 : 11,
-                  background: "var(--brand-tint)", color: "var(--brand-deep)" }}
-              >
-                or
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[12.5px] font-semibold leading-[1.35]">Pull it from your Google Sheet instead</span>
-                <span className="mt-[2px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>
-                  {sheetLive
-                    ? "Same columns, same checks — the tab is read live and nothing is created until you review it."
-                    : "Not connected — set SHEET_ID and Google credentials to read a tab directly. Until then, upload the file."}
-                </span>
-              </span>
-              <button
-                className="shrink-0 cursor-pointer border-none font-bold text-white disabled:opacity-60"
-                style={{ borderRadius: 10, background: "var(--brand)", padding: "7px 13px", fontSize: 11.5 }}
-                disabled={sheetBusy || !sheetLive}
-                onClick={onPullSheet}
-              >
-                {sheetBusy ? "Pulling…" : "Pull from Sheet"}
-              </button>
+                    {s.n}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12.5px] font-semibold leading-[1.35]">{s.title}</span>
+                    <span className="mt-[2px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>{s.sub}</span>
+                  </span>
+                  {s.action && (
+                    <button
+                      className="shrink-0 cursor-pointer border-none font-bold text-white"
+                      style={{ borderRadius: 10, background: "var(--brand)", padding: "7px 13px", fontSize: 11.5 }}
+                      onClick={s.onAction}
+                    >
+                      {s.action}
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
-          )}
-          {historyAction && (
-            <button className="btn-quiet self-start text-[11.5px]" onClick={historyAction.onClick}>
-              {historyAction.label}
-            </button>
+            <label
+              className="relative mt-[12px] block cursor-pointer rounded-[16px] p-[20px_16px] text-center"
+              style={{ border: "1.5px dashed var(--brand-ring)", background: "#F4F8FD" }}
+            >
+              <span className="text-[22px] leading-none">📄</span>
+              <span className="mt-[7px] block text-[12.5px] font-bold">{dropTitle}</span>
+              <span className="mt-[3px] block text-[11.5px]" style={{ color: "var(--muted)" }}>{dropSub}</span>
+              <input
+                type="file"
+                accept=".csv,text/csv,.xlsx,.xls"
+                className="absolute inset-0 size-full cursor-pointer opacity-0"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
+              />
+            </label>
+            {historyAction && (
+              <button className="btn-quiet mt-[10px] self-start text-[11.5px]" onClick={historyAction.onClick}>
+                {historyAction.label}
+              </button>
+            )}
+          </div>
+
+          {onPullSheet && (
+            <>
+              <div className="flex items-center gap-[10px] text-[11px] font-bold uppercase tracking-[0.07em]" style={{ color: "var(--muted)" }}>
+                <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+                or
+                <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+              </div>
+              <div className="rounded-[16px] p-[14px_15px]" style={{ border: "1px solid var(--line)", background: "#fff" }}>
+                <div className="flex items-center justify-between gap-[10px]">
+                  <div style={{ ...SECTION_LABEL, marginBottom: 0 }}>Option B · Pull from your Google Sheet</div>
+                  <span className="rounded-[7px] px-[8px] py-[3px] text-[10.5px]"
+                    style={sheetLive ? { background: "#e6f2ec", color: "#14684a", fontWeight: 650 } : { background: "#eef1f6", color: "#42506b", fontWeight: 650 }}>
+                    {sheetLive ? "Connected" : "Not connected"}
+                  </span>
+                </div>
+                <div className="mt-[10px] flex items-center gap-[12px]">
+                  <span className="text-[22px] leading-none" aria-hidden>📊</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12.5px] font-semibold leading-[1.35]">No file needed — we read the tab for you</span>
+                    <span className="mt-[2px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>
+                      {sheetLive
+                        ? "Same columns as the template, same checks before anything is created."
+                        : "Set SHEET_ID and Google credentials to read a tab directly. Until then, use Option A."}
+                    </span>
+                  </span>
+                  <button
+                    className="shrink-0 cursor-pointer border-none font-bold text-white disabled:opacity-60"
+                    style={{ borderRadius: 10, background: "var(--brand)", padding: "7px 13px", fontSize: 11.5 }}
+                    disabled={sheetBusy || !sheetLive}
+                    onClick={onPullSheet}
+                  >
+                    {sheetBusy ? "Pulling…" : "Pull from Sheet"}
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </>
       )}
