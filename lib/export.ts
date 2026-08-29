@@ -14,9 +14,11 @@ export interface ScheduleExporter {
   export(rows: ExportRow[], name: string): Promise<void>;
 }
 
+/** Quoted exactly as engine/sheets.py::_cell quotes it, including the formula-prefix guard (QA-08). */
 function csvCell(v: unknown): string {
-  const s = String(v ?? "");
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const raw = String(v ?? "");
+  const s = /^[=@+-]/.test(raw) ? `'${raw}` : raw;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function toCsv(rows: ExportRow[]): string {

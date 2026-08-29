@@ -402,6 +402,9 @@ def test_read_tab_returns_csv_the_typescript_parser_can_split(sheet):
                           'DSA-02,DSA,"He said ""hi"""\r\n')
     # the quoting rule is lib/export.ts's, so lib/import.ts::splitCsv reads it back unchanged
     assert SH.to_csv([["a", "b,c", 'd"e']]) == 'a,"b,c","d""e"\r\n'
+    # QA-08: a cell that would open as a formula is neutralised, quoting still applied afterwards
+    assert SH.to_csv([['=cmd|" /C calc"!A0', "@SUM(1+1)", "+1+1", "-1+1", "x-1"]]) == (
+        '"\'=cmd|"" /C calc""!A0",\'@SUM(1+1),\'+1+1,\'-1+1,x-1\r\n')
 
 
 def test_read_tab_reports_an_empty_tab_rather_than_pretending(sheet):

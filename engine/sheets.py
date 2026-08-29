@@ -52,8 +52,11 @@ def status() -> dict:
 
 
 def _cell(value) -> str:
-    """One CSV cell, quoted exactly as lib/export.ts::toCsv quotes it."""
+    """One CSV cell, quoted exactly as lib/export.ts::csvCell quotes it. A leading = @ + or - would be
+    evaluated as a formula by Excel or Sheets, so it is neutralised with an apostrophe (QA-08)."""
     s = "" if value is None else str(value)
+    if s[:1] in ("=", "@", "+", "-"):
+        s = "'" + s
     return '"' + s.replace('"', '""') + '"' if any(c in s for c in '",\n\r') else s
 
 
