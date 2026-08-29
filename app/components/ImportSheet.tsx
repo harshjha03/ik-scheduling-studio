@@ -19,7 +19,6 @@ interface Props {
   onPullSheet?: () => void;
   /** live | simulated, from /api/integrations — never claim a source we cannot read */
   sheetLive?: boolean;
-  sheetDetail?: string;
   sheetBusy?: boolean;
   /** an extra template download offered alongside the main one (the history contract) */
   historyAction?: { label: string; onClick: () => void };
@@ -58,7 +57,7 @@ function Section({ label, gap, maxHeight, children }: {
 
 /** Shared by the class and SME importers — same shape, different rows. */
 export default function ImportSheet({
-  steps, stepSize, warnInk, dropTitle, dropSub, onFile, onPullSheet, sheetLive, sheetDetail, sheetBusy,
+  steps, stepSize, warnInk, dropTitle, dropSub, onFile, onPullSheet, sheetLive, sheetBusy,
   historyAction, tallies, issues, preview,
 }: Props) {
   return (
@@ -106,18 +105,30 @@ export default function ImportSheet({
             />
           </label>
           {onPullSheet && (
-            /* The sheet path is the same path: it fetches the tab as CSV text and runs it through
-               the very same parser and preview the file picker uses. */
-            <div className="flex items-center gap-[10px] rounded-[14px] p-[11px_13px]"
-              style={{ border: "1px solid var(--line)", background: "#fff" }}>
-              <span className="text-[15px] leading-none" aria-hidden>📊</span>
+            /* Same path as the file: the tab is fetched as CSV text and goes through the very same
+               checks and preview. Rendered as one more step so it reads like the rest of the sheet. */
+            <div className="flex items-start gap-[11px]">
+              <span
+                className="flex shrink-0 items-center justify-center rounded-full font-bold"
+                style={{ width: stepSize, height: stepSize, fontSize: stepSize === 24 ? 11.5 : 11,
+                  background: "var(--brand-tint)", color: "var(--brand-deep)" }}
+              >
+                or
+              </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-[12px] font-semibold">Or pull from the Google Sheet</span>
-                <span className="mt-[2px] block text-[11px] leading-[1.45]" style={{ color: sheetLive ? "var(--green-ink)" : "var(--muted)" }}>
-                  {sheetLive ? "Live · " : "Simulated · "}{sheetDetail ?? "checking…"}
+                <span className="block text-[12.5px] font-semibold leading-[1.35]">Pull it from your Google Sheet instead</span>
+                <span className="mt-[2px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>
+                  {sheetLive
+                    ? "Same columns, same checks — the tab is read live and nothing is created until you review it."
+                    : "Not connected — set SHEET_ID and Google credentials to read a tab directly. Until then, upload the file."}
                 </span>
               </span>
-              <button className="btn btn-sm shrink-0" disabled={sheetBusy} onClick={onPullSheet}>
+              <button
+                className="shrink-0 cursor-pointer border-none font-bold text-white disabled:opacity-60"
+                style={{ borderRadius: 10, background: "var(--brand)", padding: "7px 13px", fontSize: 11.5 }}
+                disabled={sheetBusy || !sheetLive}
+                onClick={onPullSheet}
+              >
                 {sheetBusy ? "Pulling…" : "Pull from Sheet"}
               </button>
             </div>

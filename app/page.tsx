@@ -1148,7 +1148,6 @@ export default function Page() {
             historyAction={sme ? { label: "Download history template", onClick: () => { downloadCsv(historyTemplate(rosterFor("next")), "ik-history-template"); say("History template downloaded."); } } : undefined}
             onPullSheet={() => void pullFromSheet(sme ? "smes" : "sessions")}
             sheetLive={integrations?.sheets.live}
-            sheetDetail={integrations?.sheets.detail}
             sheetBusy={sheetBusy}
             tallies={im.parsed ? [
               { value: ok, label: hist ? "ready to apply" : sme ? "ready to add" : "ready to import", tone: ok ? "good" : "warn" },
