@@ -745,6 +745,9 @@ export default function Page() {
     const named: OverrideEvent[] = [];
     const at = new Date().toISOString();
 
+    // QA-03: ids used to restart at -i1 on every import, so importing a file twice produced two
+    // sessions with one id. Continue from the highest suffix already on the week instead.
+    const importSeq = sessionsFor("next").reduce((m, s) => Math.max(m, Number(/-i(\d+)$/.exec(s.id)?.[1] ?? 0)), 0);
     imp.rows.forEach((r, i) => {
       if (!known.has(r.batch)) {
         known.add(r.batch);
@@ -752,7 +755,7 @@ export default function Page() {
           per_week: 4, weeks_done: 0, weeks_total: 12, started: "7 Sep 2026" });
       }
       const when = new Date(new Date(ref).getTime() + (r.day - p0.day) * 864e5 + (r.hour - p0.hour) * 36e5);
-      const id = `${WEEKS.next.iso.split("-")[1]}-${r.batch}-i${i + 1}`;
+      const id = `${WEEKS.next.iso.split("-")[1]}-${r.batch}-i${importSeq + i + 1}`;
       sessions.push({
         id, batch_id: r.batch, subject: r.course,
         sub_specialty: r.type === "class" ? r.topic : null, type: r.type,

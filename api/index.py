@@ -40,6 +40,11 @@ def run(body: dict = Body(...)):
     for key in ("sessions", "smes"):
         if not isinstance(body.get(key), list) or not body[key]:
             raise HTTPException(422, f"`{key}` must be a non-empty list")
+        # QA-03: the engine keys its working set by id, so two rows sharing one would collapse into a
+        # single shared object — 42 counted, 41 scheduled, and one calendar event for two classes.
+        dupes = sorted(k for k, n in Counter(x.get("id") for x in body[key] if isinstance(x, dict)).items() if n > 1)
+        if dupes:
+            raise HTTPException(422, f"duplicate {'session' if key == 'sessions' else 'SME'} id(s): {dupes}")
     _last_run = run_pipeline(body["sessions"], body["smes"], body.get("history") or [],
                              body.get("overrides") or [], llm_enabled=body.get("llm", True) is not False)
     return _last_run

@@ -76,6 +76,8 @@ def make_world(seed: int):
 def assert_no_hard_rule_violation(draft: list[dict], smes: list[dict], seed: int | str = "-"):
     """The invariant every stage exists to protect. Reusable — call it after any scenario."""
     by_id = {s["id"]: s for s in smes}
+    ids = [r["session_id"] for r in draft]
+    assert len(set(ids)) == len(ids) == len({id(r) for r in draft}), f"seed={seed}: duplicate session_id in draft"
     held: dict[str, list[dict]] = {}
     for row in draft:
         sid = row.get("sme_id")
