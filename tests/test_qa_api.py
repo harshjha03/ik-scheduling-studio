@@ -77,3 +77,15 @@ def test_malformed_shapes_are_422_not_500(label, mutate, detail):
     with pytest.raises(HTTPException) as e:
         api.run(body)
     assert (e.value.status_code, e.value.detail) == (422, detail), label
+
+
+def test_a_partial_schedule_save_keeps_what_the_full_save_wrote(tmp_path, monkeypatch):
+    """A publish saves {draft, published} without stats; the page only restores a week that has stats.
+    The save must merge, or every reload after a publish re-drafts from scratch."""
+    monkeypatch.setenv("IK_DB_PATH", str(tmp_path / "t.db"))
+    from engine import store as store_mod
+    monkeypatch.setattr(store_mod, "_store", None)       # fresh sqlite store at the temp path
+    api.put_schedule({"week": "2099-W01", "draft": [{"session_id": "x"}], "stats": {"total_sessions": 1}, "flags": []})
+    api.put_schedule({"week": "2099-W01", "draft": [{"session_id": "x"}], "published": True})
+    saved = api.get_schedule("2099-W01")
+    assert saved["published"] is True and saved["stats"] == {"total_sessions": 1} and saved["flags"] == []

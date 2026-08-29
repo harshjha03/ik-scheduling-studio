@@ -237,9 +237,15 @@ def get_schedule(week: str):
 def put_schedule(body: dict = Body(...)):
     if not body.get("week") or not isinstance(body.get("draft"), list):
         raise HTTPException(422, "`week` and `draft` are required")
+    st = store()
     payload = {k: v for k, v in body.items() if k != "week"}
-    store().save_schedule(body["week"], payload)
-    return {"saved": body["week"], "rows": len(body["draft"]), "storage": store().info()}
+    # A partial save must never drop what an earlier full save wrote. Publish sends {draft, published}
+    # without stats, and the page refuses to restore a week that has no stats — so a plain replace
+    # meant every reload after a publish discarded the coordinator's day and re-drafted.
+    existing = st.load_schedule(body["week"]) or {}
+    merged = {**{k: v for k, v in existing.items() if k not in ("week", "updated_at")}, **payload}
+    st.save_schedule(body["week"], merged)
+    return {"saved": body["week"], "rows": len(body["draft"]), "storage": st.info()}
 
 
 @app.get("/api/data")

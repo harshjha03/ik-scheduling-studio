@@ -519,7 +519,7 @@ export default function Page() {
     setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
     setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
     setPublished((p) => ({ ...p, [week]: true }));
-    persist(saveSchedule(WEEKS[week].iso, rows, { published: true }));
+    persist(saveSchedule(WEEKS[week].iso, rows, { published: true, stats: run?.stats, flags: run?.flags }));
     say(anyLive
       ? `Week published — ${sendSummary(list)}.`
       : `Week marked published — ${sendSummary(list)} simulated (no channel credentials yet).`);
