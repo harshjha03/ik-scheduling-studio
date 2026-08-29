@@ -52,11 +52,12 @@ def status() -> dict:
 
 
 def _cell(value) -> str:
-    """One CSV cell, quoted exactly as lib/export.ts::csvCell quotes it. A leading = @ + or - would be
-    evaluated as a formula by Excel or Sheets, so it is neutralised with an apostrophe (QA-08)."""
+    """One CSV cell, quoted as lib/import.ts::splitCsv reads it. This CSV is transport to the frontend's
+    validator, never a file a spreadsheet opens, so there is deliberately NO formula-prefix guard here:
+    it turned `+91 …` phone numbers into `'+91 …` on a live pull. The Draft push writes cells with
+    valueInputOption=RAW, which Sheets stores as text, and the browser download (lib/export.ts::csvCell)
+    carries its own guard — those are the two places a formula could be evaluated (QA-08)."""
     s = "" if value is None else str(value)
-    if s[:1] in ("=", "@", "+", "-"):
-        s = "'" + s
     return '"' + s.replace('"', '""') + '"' if any(c in s for c in '",\n\r') else s
 
 
