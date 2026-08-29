@@ -1109,7 +1109,7 @@ export default function Page() {
         ];
       return (
         <Sheet
-          width={620} eyebrow={sme ? "SME management" : "Batch management"}
+          width={im.parsed ? 620 : 780} eyebrow={sme ? "SME management" : "Batch management"}
           title={im.parsed ? (hist ? "Check the history" : "Check the upload") : sme ? "Import SMEs" : "Import from Excel"}
           subtitle={im.parsed
             ? `${im.name} · ${ok} ${hist ? `history row${ok === 1 ? "" : "s"}` : sme ? `SME${ok === 1 ? "" : "s"}` : `row${ok === 1 ? "" : "s"}`} ready${bad ? `, ${bad} to fix` : ""}`
