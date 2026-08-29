@@ -96,8 +96,9 @@ def health():
 def integrations():
     """What is actually wired up right now — the UI labels every channel live or simulated."""
     return {"channels": channels.status(), "storage": store().info(), "sheets": sheets.status(),
+            # QA-10: no key configured means no model in play — do not echo LLM_MODEL as if it were live
             "llm": {"live": llm_configured(), "provider": llm_provider() if llm_configured() else None,
-                    "model": os.environ.get("LLM_MODEL")}}
+                    "model": os.environ.get("LLM_MODEL") if llm_configured() else None}}
 
 
 @app.post("/api/availability/sync")

@@ -46,3 +46,12 @@ def test_a_clean_payload_still_runs_and_every_draft_row_has_its_own_id():
     ids = [r["session_id"] for r in out["draft"]]
     assert len(set(ids)) == len(ids) == len(sessions)
 
+
+def test_integrations_reports_no_model_when_no_llm_is_configured(monkeypatch):
+    """QA-10. `model` used to echo LLM_MODEL with no key configured."""
+    for k in ("LLM_API_KEY", "ANTHROPIC_API_KEY", "LLM_BASE_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LLM_MODEL", "some-model")
+    monkeypatch.setattr(api, "store", lambda: type("S", (), {"info": staticmethod(lambda: {"driver": "none"})})())
+    llm = api.integrations()["llm"]
+    assert llm == {"live": False, "provider": None, "model": None}
