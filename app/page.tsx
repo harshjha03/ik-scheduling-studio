@@ -401,6 +401,14 @@ export default function Page() {
       say(`Change request sent to ${name}.`);
       return;
     }
+    // A pick the rules rejected is a decision, not a click: say which rule, ask, and if it puts the
+    // teacher in two rooms at once keep that as a critical HARD_CONFLICT so the week cannot publish.
+    // ponytail: same start = same hour — every session is 60 minutes on the hour
+    const clash = blocked ? rows.find((r) => r.session_id !== row.session_id && r.sme_id === smeId
+      && new Date(r.start_utc).getTime() === new Date(row.start_utc).getTime()) : undefined;
+    if (blocked && !quiet && !window.confirm(
+      `${name} is blocked for this class by a hard rule${clash ? ` — they already teach ${clash.batch_id} at this hour` : ""}.\n\n`
+      + `Assign anyway? The row stays flagged${clash ? ", and the week cannot be approved until the double-booking is resolved" : ""}.`)) return;
     setDecisions((d) => ({ ...d, [row.session_id]: { session_id: row.session_id, action: "override", override_sme_id: smeId } }));
     setOverrides((log) => [{
       kind: row.sme_id ? "teacher change" : "assigned", session_id: row.session_id, batch_id: row.batch_id, week,
@@ -417,7 +425,10 @@ export default function Page() {
         ? [...x.flags.filter((f) => f.code !== "UNFILLED"),
           { code: "RULE_OVERRIDE_RISK" as const, priority: 3, severity: "high" as const,
             session_id: x.session_id, sme_id: smeId,
-            reason: `Override assigns ${name} against a hard rule — kept visible on purpose.` }]
+            reason: `Override assigns ${name} against a hard rule — kept visible on purpose.` },
+          ...(clash ? [{ code: "HARD_CONFLICT" as const, priority: 2, severity: "critical" as const,
+            session_id: x.session_id, sme_id: smeId,
+            reason: `${name} also teaches ${clash.batch_id} at this hour — double-booked.` }] : [])]
         : x.flags.filter((f) => f.code !== "UNFILLED" && f.code !== "HARD_CONFLICT" && f.code !== "FAIRNESS_VIOLATION"),
     }));
     setApproved((a) => { const n = new Set(a); n.delete(row.session_id); return n; });
@@ -481,6 +492,7 @@ export default function Page() {
 
   const approveWeek = () => {
     if (unfilledCount) { say(`${unfilledCount} class(es) still have no teacher — clear them from Work items first.`); return; }
+    if (conflictCount) { say(`${conflictCount} class(es) have a double-booked teacher — resolve them from Work items first.`); return; }
     setPubStatus({});
     setPubSel(ALL_LEAVES);
     setSheet({ kind: "publish" });

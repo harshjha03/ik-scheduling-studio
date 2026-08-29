@@ -42,6 +42,7 @@ export default function Dashboard({
 }: Props) {
   const locked = weeks[week].locked;
   const unfilled = allRows.filter((r) => !r.sme_id).length;
+  const conflicts = allRows.filter((r) => r.flags.some((f) => f.code === "HARD_CONFLICT")).length;
   const counts = CATEGORIES.reduce((acc, c) => {
     acc[c.key] = rows.filter((r) => category(r, approved.has(r.session_id)) === c.key).length;
     return acc;
@@ -87,10 +88,12 @@ export default function Dashboard({
             <button
               className="btn btn-go"
               onClick={onApproveWeek}
-              disabled={unfilled > 0}
+              disabled={unfilled > 0 || conflicts > 0}
               title={unfilled
                 ? `${unfilled} class(es) still have no teacher — clear them from Work items first.`
-                : `Publishes all ${allRows.length} classes to learner and SME calendars.`}
+                : conflicts
+                  ? `${conflicts} class(es) have a double-booked teacher — resolve them from Work items first.`
+                  : `Publishes all ${allRows.length} classes to learner and SME calendars.`}
             >
               Approve week · {allRows.length}
             </button>

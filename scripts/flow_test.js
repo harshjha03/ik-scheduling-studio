@@ -109,6 +109,8 @@ const HELPERS = `
 `;
 
 const H = `
+  // rule-breaking picks now ask for confirmation; the suite always says yes
+  if (!window.__confirmStubbed) { window.__confirmStubbed = true; window.confirm = () => true; }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
   const all = (sel) => [...document.querySelectorAll(sel)];
