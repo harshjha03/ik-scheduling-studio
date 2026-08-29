@@ -121,7 +121,7 @@ export default function ImportSheet({
                 <div style={{ ...SECTION_LABEL, marginBottom: 0 }}>Option B · Google Sheet</div>
                 <span className="shrink-0 rounded-[7px] px-[8px] py-[3px] text-[10.5px]"
                   style={sheetLive ? { background: "#e6f2ec", color: "#14684a", fontWeight: 650 } : { background: "#eef1f6", color: "#42506b", fontWeight: 650 }}>
-                  {sheetLive ? "Connected" : "Not connected"}
+                  {sheetLive ? "Live" : "Simulated"}
                 </span>
               </div>
               <div className="mt-[14px] flex flex-1 flex-col items-center justify-center rounded-[16px] p-[18px_14px] text-center"
@@ -130,13 +130,13 @@ export default function ImportSheet({
                 <span className="mt-[7px] block text-[12.5px] font-bold">No file needed — we read the tab</span>
                 <span className="mt-[3px] block text-[11.5px] leading-[1.5]" style={{ color: "var(--muted)" }}>
                   {sheetLive
-                    ? "Same columns as the template, same checks before anything is created."
-                    : "Set SHEET_ID and Google credentials to read a tab directly. Until then, use Option A."}
+                    ? "Live · same columns as the template, same checks before anything is created."
+                    : "Simulated · reads the bundled sample data until SHEET_ID and Google credentials are set."}
                 </span>
                 <button
                   className="mt-[14px] cursor-pointer border-none font-bold text-white disabled:opacity-60"
                   style={{ borderRadius: 10, background: "var(--brand)", padding: "8px 16px", fontSize: 11.5 }}
-                  disabled={sheetBusy || !sheetLive}
+                  disabled={sheetBusy}
                   onClick={onPullSheet}
                 >
                   {sheetBusy ? "Pulling…" : "Pull from Sheet"}
