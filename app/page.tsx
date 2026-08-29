@@ -74,6 +74,9 @@ const ALL_LEAVES: Record<string, boolean> = Object.fromEntries(
   ["cal", "email", "sms"].flatMap((c) => ["sme", "stu"].map((a) => [`${c}:${a}`, true])),
 );
 
+/** QA-02: a failed write used to be indistinguishable from success. */
+const SAVE_FAILED = "Saved here, but the server copy failed — your changes may not survive a reload.";
+
 export default function Page() {
   // Bundled seed data is the initial state, so first paint is identical with the API unreachable.
   // A /api/data fetch below replaces whatever has been stored since; there is no loading state.
@@ -155,6 +158,12 @@ export default function Page() {
     setToast(msg);
     toastTimer.current = setTimeout(() => setToast(null), 2800);
   }, []);
+  // Every durable write goes through here: a failure is said out loud and stays on screen until a
+  // later write succeeds, so a success toast that lands afterwards cannot hide it.
+  const [saveFailed, setSaveFailed] = useState(false);
+  const persist = useCallback((p: Promise<unknown>) => {
+    p.then(() => setSaveFailed(false), () => { setSaveFailed(true); say(SAVE_FAILED); });
+  }, [say]);
 
   useEffect(() => {
     // never claim a live source: the labels come from the server, and absence is shown as simulated
@@ -246,9 +255,9 @@ export default function Page() {
       setChanged(changedIds);
       setRuns((s) => ({ ...s, next: res }));
       // durable copy, so a refresh does not lose the coordinator's work
-      void saveSchedule(WEEKS.next.iso, res.draft, {
+      persist(saveSchedule(WEEKS.next.iso, res.draft, {
         stats: res.stats, flags: res.flags, published: false, provenance, history: historyRecords,
-      }).catch(() => {});
+      }));
       setApproved((a) => new Set([...a].filter((id) => !res.draft.some((r) => r.session_id === id))));
       setPublished((p) => ({ ...p, next: false }));   // a re-draft invalidates what people were sent
       setDecisions({});
@@ -268,7 +277,7 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, historyRecords, say]);
+  }, [runs.current, availOff, overrides, sessionsFor, rosterFor, historyRecords, say, persist]);
 
   // initial load: settle the current week (no LLM), then draft the next on top of it
   useEffect(() => {
@@ -298,7 +307,7 @@ export default function Page() {
         if (!alive) return;
         nextRef.current = nxt.draft;
         setRuns((s) => ({ ...s, next: nxt }));
-        void saveSchedule(WEEKS.next.iso, nxt.draft, { stats: nxt.stats, flags: nxt.flags, published: false }).catch(() => {});
+        persist(saveSchedule(WEEKS.next.iso, nxt.draft, { stats: nxt.stats, flags: nxt.flags, published: false }));
       } catch (e) {
         say(String(e).slice(0, 160));
       } finally {
@@ -306,7 +315,7 @@ export default function Page() {
       }
     })();
     return () => { alive = false; };
-  }, [say]);
+  }, [say, persist]);
 
   const run = runs[week];
   const rows = useMemo(() => run?.draft ?? [], [run]);
@@ -501,7 +510,7 @@ export default function Page() {
     setApproved((a) => new Set([...a, ...rows.map((r) => r.session_id)]));
     setDecisions((d) => ({ ...d, ...Object.fromEntries(rows.map((r) => [r.session_id, { session_id: r.session_id, action: "approve" as const }])) }));
     setPublished((p) => ({ ...p, [week]: true }));
-    void saveSchedule(WEEKS[week].iso, rows, { published: true }).catch(() => {});
+    persist(saveSchedule(WEEKS[week].iso, rows, { published: true }));
     say(anyLive
       ? `Week published — ${sendSummary(list)}.`
       : `Week marked published — ${sendSummary(list)} simulated (no channel credentials yet).`);
@@ -699,7 +708,7 @@ export default function Page() {
     setHistoryRecords(recs);
     const srcH = pulled.history?.source ?? "CSV upload";
     setProvenance((p) => ({ ...p, history: pulled.history ?? { source: srcH, at: new Date().toISOString(), rows: recs.length } }));
-    void putData("history", recs, srcH).catch(() => {});
+    persist(putData("history", recs, srcH));
     setHistImp(emptyImport());
     setSheet(null);
     await runNext({ quiet: true });
@@ -774,7 +783,7 @@ export default function Page() {
     setWeek("next");
     const srcS = pulled.sessions?.source ?? "CSV upload";
     setProvenance((p) => ({ ...p, sessions: pulled.sessions ?? { source: srcS, at, rows: imp.rows.length } }));
-    void putData("sessions_next", [...sessionsFor("next"), ...sessions], srcS).catch(() => {});
+    persist(putData("sessions_next", [...sessionsFor("next"), ...sessions], srcS));
     await runNext({ sessions: [...sessionsFor("next"), ...sessions], overrides: [...named, ...overrides], quiet: true });
     say(`${imp.rows.length} classes imported${fresh.length ? ` · ${fresh.length} new batch${fresh.length === 1 ? "" : "es"}` : ""}.`);
   };
@@ -785,7 +794,7 @@ export default function Page() {
     setExtraSmes((s) => [...s, ...added]);
     const src = pulled.smes?.source ?? "CSV upload";
     setProvenance((p) => ({ ...p, smes: pulled.smes ?? { source: src, at: new Date().toISOString(), rows: added.length } }));
-    void putData("smes", [...smeData.next, ...added], src).catch(() => {});
+    persist(putData("smes", [...smeData.next, ...added], src));
     setSheet(null);
     setSmeImp(emptyImport());
     setSmeFilter("all");
@@ -907,7 +916,7 @@ export default function Page() {
       setDecisions((d) => ({ ...d, ...Object.fromEntries(out.override_log.map((e) => [e.session_id,
         { session_id: e.session_id, action: "override" as const, override_sme_id: e.to_sme_id }])) }));
       if (published.next) setPublished((p) => ({ ...p, next: false }));
-      void saveSchedule(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }).catch(() => {});
+      persist(saveSchedule(WEEKS.next.iso, out.draft, { stats: out.stats, flags: out.flags, published: false }));
       getOverrides().then(setOverrideStats).catch(() => {});
       return true;
     } catch (e) {
@@ -1787,6 +1796,12 @@ export default function Page() {
           onApply={(i) => void applyChatPlan(i)}
           onReset={() => { setChatTurns([]); setChatDraft(""); }}
         />
+      )}
+      {saveFailed && (
+        <div role="alert" className="fixed bottom-[70px] left-1/2 z-90 rounded-[12px] px-4 py-2 text-[12.5px]"
+          style={{ transform: "translateX(-50%)", background: "var(--amber-tint)", color: "var(--amber-ink)", fontWeight: 550 }}>
+          {SAVE_FAILED}
+        </div>
       )}
       <Toast text={toast} />
     </div>

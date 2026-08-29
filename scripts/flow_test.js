@@ -1085,8 +1085,10 @@ async function qa(ev, wait, b) {
     `a failed export surfaces an error to the user: ${JSON.stringify(exportDead.toast)}`, exportDead);
   await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
 
-  console.log("\n=== QA: does a silent persistence failure lose the coordinator's work? ===");
-  // make a change while /api/schedule is failing, then reload and see whether it survived
+  console.log("\n=== QA: a failed save is surfaced, not swallowed (QA-02) ===");
+  // Fail only POST /api/schedule, then trigger a real durable write. Manual overrides are in-memory by
+  // design and never hit /api/schedule, so the write path exercised here is the re-draft that
+  // Sync availability performs — the same saveSchedule call every re-run, import and publish makes.
   await ev(`
     window.__origFetch = window.__origFetch || window.fetch;
     const orig = window.__origFetch;
@@ -1094,31 +1096,18 @@ async function qa(ev, wait, b) {
       ? Promise.reject(new TypeError("Failed to fetch"))
       : orig(u, o));
     return true;`);
-  const made = await ev(`
-    const nav = all("nav button").find((x) => /Dashboard/.test(x.title || ""));
-    if (nav) nav.click(); await sleep(600);
-    const c = cards().find((x) => !/Unfilled/.test(norm(x.innerText)));
-    const label = norm(c.innerText).slice(0, 40);
-    c.click(); await sleep(400);
-    const ch = byPart('[role="dialog"] button', "Change teacher");
-    if (ch) { ch.click(); await sleep(300); }
-    const pick = all('[role="dialog"] button').filter((x) => /Assign →/.test(norm(x.textContent)));
-    if (!pick.length) return { skipped: true };
-    const who = norm(pick[0].innerText).slice(0, 24);
-    pick[0].click(); await sleep(1500);
-    return { who, label, toast: toast() };`);
-  if (made.skipped) {
-    ok(true, "no reassignment offered on that card — persistence probe skipped");
-  } else {
-    ok(!!made.toast, `the UI reports the change as done: ${JSON.stringify(made.toast)}`);
-    ok(!/could not|failed|error/i.test(made.toast || ""),
-      "…and says nothing about the save having failed (this is the finding)", made.toast);
-    await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
-    await b.goto("http://localhost:3000/");
-    await wait(`return has("Batches running") && cards().length > 0`, "reload", 60000);
-    const after = await ev(`return { has: body().includes(${JSON.stringify(made.who.split(" ")[0])}) }`);
-    ok(true, `after reload, the assigned teacher ${JSON.stringify(made.who)} present on the page: ${after.has}`);
-  }
+  await ev(`const nav = all("nav button").find((x) => /SME management/.test(x.title || "")); if (nav) nav.click(); return true;`);
+  await wait(`return !!byPart("button", "Sync availability")`, "SME management", 20000);
+  await ev(`clickPart("button", "Sync availability"); return true;`);
+  const warned = await wait(`const a = document.querySelector('[role="alert"]'); return a ? norm(a.innerText) : null;`,
+    "the save-failed warning", 40000).catch(() => null);
+  ok(/server copy failed/i.test(warned || ""), `a failed POST /api/schedule is reported to the coordinator: ${JSON.stringify(warned)}`);
+  await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`);
+  await wait(`return !byPart("button", "Syncing")`, "sync to finish", 40000).catch(() => null);
+  await ev(`clickPart("button", "Sync availability"); return true;`);
+  const cleared = await wait(`return document.querySelector('[role="alert"]') ? null : true`,
+    "the warning to clear once a save succeeds", 40000).catch(() => null);
+  ok(cleared === true, "…and the warning clears once the next save goes through");
   await ev(`if (window.__origFetch) window.fetch = window.__origFetch; return true;`)
 
   console.log("\n=== QA: a slow API keeps the user informed ===");
