@@ -25,6 +25,9 @@ interface Props {
   onGhost: (sessionId: string) => void;
   onEditSme: (smeId: string) => void;
   onReportOut: (smeId: string) => void;
+  /** teachers ops has taken out of next week; toggling re-drafts the week deterministically */
+  unavailable: Record<string, boolean>;
+  onToggleUnavailable: (smeId: string) => void;
   onImportSmes: () => void;
   /** read each teacher's calendar for the week and re-draft against what is already booked */
   onSyncAvailability: () => void;
@@ -43,7 +46,7 @@ const LEVEL_CHIP: Record<string, { bg: string; fg: string }> = {
 
 export default function SmeManagement({
   smes, rows, courses, meta, weeks, week, weekDates, approved, selected, leave, query, filter, vh,
-  onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onReportOut, onImportSmes,
+  onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onReportOut, unavailable, onToggleUnavailable, onImportSmes,
   onSyncAvailability, syncBusy, busyBlocks, syncDetail, syncLive,
 }: Props) {
   const shown = smes.filter((s) => smeMatches(s, rows, query, filter, leave));
@@ -227,8 +230,14 @@ export default function SmeManagement({
                     </td>
                     <td style={{ ...td, paddingRight: 20, textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
                       <span className="inline-flex gap-[6px]">
-                        <button className="btn btn-sm" onClick={() => onReportOut(s.id)} title="Teacher dropped out — let the copilot find cover">
-                          Report unavailable…
+                        <button className="btn btn-sm" onClick={() => onToggleUnavailable(s.id)}
+                          title={unavailable[s.id]
+                            ? "Put this teacher back into next week's draft"
+                            : "Take this teacher out of next week — the draft re-runs without them and anything uncovered lands in Work items"}>
+                          {unavailable[s.id] ? "Mark available" : "Mark unavailable"}
+                        </button>
+                        <button className="btn btn-sm" onClick={() => onReportOut(s.id)} title="Ask the copilot to find cover for this teacher">
+                          Find cover…
                         </button>
                         <button className="btn btn-sm" onClick={() => onEditSme(s.id)} title="Edit profile basics">
                           Edit

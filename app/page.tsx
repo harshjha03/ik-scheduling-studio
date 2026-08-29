@@ -210,13 +210,17 @@ export default function Page() {
   }, []);
 
   /** The seed roster plus whatever ops added or edited this session — imports and profile edits. */
-  const rosterFor = useCallback((w: WeekKey): SME[] => (
+  // Teachers ops has taken out of next week. Applied as an empty availability, so Stage A rules them
+  // out with the ordinary `availability` reason and the week re-drafts without a copilot.
+  const [unavailable, setUnavailable] = useState<Record<string, boolean>>({});
+  const rosterFor = useCallback((w: WeekKey, off: Record<string, boolean> = unavailable): SME[] => (
     [...smeData[w], ...extraSmes].map((s) => {
       const merged = smeEdits[s.id] ? { ...s, ...smeEdits[s.id] } : s;
       // a synced calendar block is a hard rule in Stage A, so it travels with the roster
-      return externalBusy[s.id]?.length ? { ...merged, external_busy: externalBusy[s.id] } : merged;
+      const withBusy = externalBusy[s.id]?.length ? { ...merged, external_busy: externalBusy[s.id] } : merged;
+      return w === "next" && off[s.id] ? { ...withBusy, weekly_availability: [] } : withBusy;
     })
-  ), [extraSmes, smeEdits, externalBusy]);
+  ), [extraSmes, smeEdits, externalBusy, unavailable]);
 
   const smesFor = useCallback((w: WeekKey): SME[] => rosterFor(w), [rosterFor]);
 
@@ -486,6 +490,22 @@ export default function Page() {
     }
     setResolvedLog((l) => l.filter((_, x) => x !== i));
     say("Reverted.");
+  };
+
+  /** Ops takes a teacher out of next week (or brings them back). Deterministic: Stage A rules them out
+   *  and the week re-drafts — the copilot is for finding cover, not for recording the fact. */
+  const toggleUnavailable = async (smeId: string) => {
+    const who = rosterFor("next").find((x) => x.id === smeId);
+    if (!who) return;
+    const off = !unavailable[smeId];
+    const next = { ...unavailable, [smeId]: off };
+    const had = (runs.next?.draft ?? []).filter((r) => r.sme_id === smeId).length;
+    setUnavailable(next);
+    setLeave((l) => { const n = { ...l }; if (off) n[smeId] = "Marked unavailable by ops"; else delete n[smeId]; return n; });
+    await runNext({ smes: rosterFor("next", next), quiet: true });
+    say(off
+      ? `${who.name} marked unavailable next week — ${had} class(es) re-drafted; anything without cover is in Work items.`
+      : `${who.name} is available again — next week re-drafted.`);
   };
 
   // ---------- publish ----------
@@ -1702,6 +1722,7 @@ export default function Page() {
           onGhost={(sessionId) => setSheet({ kind: "ghost", sessionId, week, smeId: selSme })}
           onEditSme={openProfile}
           onReportOut={(id) => openAgent({ mode: "recovery", smeId: id, days: [] })}
+          unavailable={unavailable} onToggleUnavailable={(id) => void toggleUnavailable(id)}
           onSyncAvailability={() => void runAvailabilitySync()}
           syncBusy={syncBusy}
           busyBlocks={busyBlocks}

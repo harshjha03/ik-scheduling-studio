@@ -834,16 +834,16 @@ async function copilot(ev, wait) {
   ok(ask.btn, "dashboard offers 'Ask the copilot'", ask);
 
   await ev(`const nav = all("nav button").find((x) => /SME management/.test(x.title || "")); nav.click(); return true;`);
-  await wait(`return !!byPart("button", "Report unavailable")`, "SME management to open", 20000);
+  await wait(`return !!byPart("button", "Find cover")`, "SME management to open", 20000);
   // Rahul Desai (T14) is the seeded SME persona and holds a class next week
   const opened = await ev(`
     const row = all("tbody tr").find((r) => /Rahul Desai/.test(norm(r.innerText)));
     if (!row) return { skipped: true };
-    [...row.querySelectorAll("button")].find((x) => /Report unavailable/.test(norm(x.textContent))).click();
+    [...row.querySelectorAll("button")].find((x) => /Find cover/.test(norm(x.textContent))).click();
     await sleep(500);
     const t = sheetText() || "";
     return { open: !!sheet(), title: /Cover for Rahul Desai/.test(t), whole: /Whole week/.test(t), find: !!byPart('[role="dialog"] button', "Find cover") };`);
-  ok(!opened.skipped && opened.open && opened.title, "'Report unavailable…' opens the copilot pre-filled for that teacher", opened);
+  ok(!opened.skipped && opened.open && opened.title, "'Find cover…' opens the copilot pre-filled for that teacher", opened);
   ok(opened.whole && opened.find, "with a day picker and a Find cover action", opened);
 
   await ev(`clickPart('[role="dialog"] button', "Find cover"); return true;`);
