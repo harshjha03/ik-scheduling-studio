@@ -35,6 +35,8 @@ interface Props {
   showSme?: boolean;
   /** viewport height, so the week always fits one screen */
   vh?: number;
+  /** compact layouts (such as the SME modal) scale the grid to its container without scrolling */
+  fit?: boolean;
 }
 
 type Item = { hour: number; day: number; row?: DraftRow; ghost?: GhostRow };
@@ -44,7 +46,7 @@ type Item = { hour: number; day: number; row?: DraftRow; ghost?: GhostRow };
  * one screen. A jump in the axis is marked with a dashed rule and a `⋯` on the label.
  */
 export default function WeekCalendar({
-  rows, courses, meta, weekDates, approved, changed, onOpen, freeCells, ghosts = [], onGhost, showSme = true, vh = 900,
+  rows, courses, meta, weekDates, approved, changed, onOpen, freeCells, ghosts = [], onGhost, showSme = true, vh = 900, fit = false,
 }: Props) {
   const [H0, H1] = meta.hours;
   const items: Item[] = [
@@ -71,18 +73,21 @@ export default function WeekCalendar({
   const n = Math.max(1, list.length);
   const at = new Map(list.map((h, i) => [h, i]));
   const pct = 100 / n;
-  const minRow = vh >= 640 ? 58 : MIN_ROW;
-  const colStyle: CSSProperties = { height: "100%", minHeight: n * minRow, maxHeight: n * ROW_H };
+  const minRow = fit ? Math.max(28, Math.min(40, Math.floor((vh - 130) / n))) : vh >= 640 ? 58 : MIN_ROW;
+  const colStyle: CSSProperties = {
+    height: "100%", minHeight: n * minRow,
+    ...(fit ? {} : { maxHeight: n * ROW_H }),
+  };
   const gapAt = (i: number) => i > 0 && list[i] - list[i - 1] > 1;
 
   const byDay = new Map<number, Item[]>();
   items.forEach((it) => byDay.set(it.day, [...(byDay.get(it.day) ?? []), it]));
 
   return (
-    <div className="flex-1 overflow-auto px-5 pb-[14px]" data-cal-pane="1">
+    <div className={`flex-1 ${fit ? "overflow-hidden px-3 pb-3" : "overflow-auto px-5 pb-[14px]"}`} data-cal-pane="1">
       <div
-        className="grid min-h-full min-w-[920px]"
-        style={{ gridTemplateColumns: "58px repeat(6,minmax(0,1fr))", gridTemplateRows: "auto minmax(0,1fr)" }}
+        className={`grid min-h-full ${fit ? "min-w-0" : "min-w-[920px]"}`}
+        style={{ gridTemplateColumns: `${fit ? 42 : 58}px repeat(6,minmax(0,1fr))`, gridTemplateRows: "auto minmax(0,1fr)" }}
       >
         <div className="sticky left-0 top-0 z-[4] bg-white" />
         {weekDates.map((h) => (

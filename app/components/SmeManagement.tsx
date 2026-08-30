@@ -52,7 +52,8 @@ export default function SmeManagement({
   onQuery, onFilter, onSelect, onOpen, onGhost, onEditSme, onReportOut, unavailable, onToggleUnavailable, onImportSmes,
   onSyncAvailability, syncBusy, workload, busyBlocks, syncDetail, syncLive,
 }: Props) {
-  const [showLoad, setShowLoad] = useState(true);
+  const [section, setSection] = useState<"list" | "workload">("list");
+  const [showDetail, setShowDetail] = useState(false);
   const shown = smes.filter((s) => smeMatches(s, rows, query, filter, leave));
   const sel = smes.find((s) => s.id === selected) ?? shown[0] ?? smes[0];
   const selRows = rows.filter((r) => r.sme_id === sel.id);
@@ -76,8 +77,31 @@ export default function SmeManagement({
     ["leave", "On leave", "Has leave booked"],
   ];
 
+  const openSme = (id: string) => {
+    onSelect(id);
+    setShowDetail(true);
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-[14px]">
+      <div className="tabs w-fit" aria-label="SME subsections">
+        <button
+          className={`tab ${section === "list" ? "tab-on" : "tab-off"}`}
+          aria-pressed={section === "list"}
+          onClick={() => { setSection("list"); setShowDetail(false); }}
+        >
+          SME List
+        </button>
+        <button
+          className={`tab ${section === "workload" ? "tab-on" : "tab-off"}`}
+          aria-pressed={section === "workload"}
+          onClick={() => { setSection("workload"); setShowDetail(false); }}
+        >
+          Workload over past weeks
+        </button>
+      </div>
+
+      {section === "list" && (
       <section className="card flex min-h-[268px] flex-1 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-[9px] p-[12px_20px_11px]" style={{ borderBottom: "0.5px solid rgba(16,26,51,0.06)" }}>
           <span className="whitespace-nowrap text-[13px] font-bold">
@@ -157,7 +181,7 @@ export default function SmeManagement({
                 return (
                   <tr
                     key={s.id}
-                    onClick={() => onSelect(s.id)}
+                    onClick={() => openSme(s.id)}
                     className="cursor-pointer hover:bg-[rgba(79,149,216,0.05)]"
                     style={{ background: on ? "rgba(79,149,216,0.06)" : "transparent", boxShadow: on ? "inset 3px 0 0 var(--brand-bright)" : "none" }}
                   >
@@ -262,42 +286,71 @@ export default function SmeManagement({
           </table>
         </div>
       </section>
+      )}
 
-      <WorkloadCard rows={workload} query={query} filter={filter} smeRows={rows} leave={leave}
-        open={showLoad} onToggle={() => setShowLoad((v) => !v)} selected={sel.id} onSelect={onSelect} />
+      {section === "workload" && (
+        <WorkloadCard rows={workload} query={query} filter={filter} smeRows={rows} leave={leave}
+          selected={sel.id} onSelect={openSme} />
+      )}
 
-      <section className="card flex min-h-[186px] flex-1 flex-col">
-        <div className="flex shrink-0 flex-wrap items-center gap-3 p-[13px_20px_11px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
-          <div>
-            <div className="text-[13px] font-bold">Availability &amp; assignment history</div>
-            <div className="mt-[2px] text-[11.5px]" style={{ color: "var(--muted)" }}>
-              {sel.name} · {selRows.length} assigned in {weeks[week].label.toLowerCase()} · green blocks are free working hours
-              {ghosts.length ? ` · ${ghosts.length} unfilled class(es) fit in them` : ""}
+      {showDetail && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-6"
+          onClick={() => setShowDetail(false)}
+          style={{
+            background: "rgba(16,26,51,0.28)", backdropFilter: "blur(16px) saturate(130%)",
+            WebkitBackdropFilter: "blur(16px) saturate(130%)", zIndex: 60, animation: "overlayIn .22s ease-out",
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Availability and assignment history for ${sel.name}`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex min-h-0 w-full flex-col overflow-hidden rounded-[22px] bg-white"
+            style={{
+              width: "min(760px, calc(100vw - 64px), calc(100vh - 120px))", aspectRatio: "1 / 1",
+              boxShadow: "0 32px 80px rgba(16,26,51,0.28), 0 0 0 0.5px rgba(16,26,51,0.08)",
+              animation: "sheetIn .32s cubic-bezier(.32,.72,0,1)",
+            }}
+          >
+            <div className="flex shrink-0 flex-wrap items-center gap-3 p-[16px_20px_13px]" style={{ borderBottom: "1px solid var(--line-2)" }}>
+              <div>
+                <div className="text-[15px] font-bold">Availability &amp; assignment history</div>
+                <div className="mt-[2px] text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  {sel.name} · {selRows.length} assigned in {weeks[week].label.toLowerCase()} · green blocks are free working hours
+                  {ghosts.length ? ` · ${ghosts.length} unfilled class(es) fit in them` : ""}
+                </div>
+              </div>
+              <button className="btn btn-sm ml-auto" onClick={() => setShowDetail(false)}>
+                Close calendar
+              </button>
             </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-wrap gap-[14px] p-[10px_20px_8px] text-[11.5px]" style={{ color: "var(--ink-3)" }}>
-          <span>
-            <span className="mr-[6px] inline-block size-[10px] rounded-[3px]" style={{ background: "#e6f2ec", border: "1px solid var(--green-line)" }} />
-            free working hour
-          </span>
-          <span>
-            <span
-              className="mr-[6px] inline-block size-[10px] rounded-[3px]"
-              style={{ background: "#fff", ...accentBorder("1px solid var(--field)", "3px solid #4a7fd0") }}
+            <div className="flex shrink-0 flex-wrap gap-[14px] p-[10px_20px_8px] text-[11.5px]" style={{ color: "var(--ink-3)" }}>
+              <span>
+                <span className="mr-[6px] inline-block size-[10px] rounded-[3px]" style={{ background: "#e6f2ec", border: "1px solid var(--green-line)" }} />
+                free working hour
+              </span>
+              <span>
+                <span
+                  className="mr-[6px] inline-block size-[10px] rounded-[3px]"
+                  style={{ background: "#fff", ...accentBorder("1px solid var(--field)", "3px solid #4a7fd0") }}
+                />
+                assigned class
+              </span>
+              <span>
+                <span className="mr-[6px] inline-block size-[10px] rounded-[3px]" style={{ background: "var(--sand-tint)", border: "1px dashed var(--amber)" }} />
+                unfilled class that fits here — click to assign
+              </span>
+            </div>
+            <WeekCalendar
+              rows={selRows} courses={courses} meta={meta} weekDates={weekDates} approved={approved}
+              onOpen={onOpen} freeCells={freeCells} ghosts={ghosts} onGhost={onGhost} showSme={false}
+              vh={Math.min(vh, 620)} fit
             />
-            assigned class
-          </span>
-          <span>
-            <span className="mr-[6px] inline-block size-[10px] rounded-[3px]" style={{ background: "var(--sand-tint)", border: "1px dashed var(--amber)" }} />
-            unfilled class that fits here — click to assign
-          </span>
+          </section>
         </div>
-        <WeekCalendar
-          rows={selRows} courses={courses} meta={meta} weekDates={weekDates} approved={approved}
-          onOpen={onOpen} freeCells={freeCells} ghosts={ghosts} onGhost={onGhost} showSme={false} vh={vh}
-        />
-      </section>
+      )}
     </div>
   );
 }
@@ -311,18 +364,17 @@ export default function SmeManagement({
  * there was nowhere in the app to see where that came from — so the band was a number a coordinator
  * had to take on trust. These are the same figures, per teacher, with the band drawn on.
  */
-function WorkloadCard({ rows, query, filter, smeRows, leave, open, onToggle, selected, onSelect }: {
+function WorkloadCard({ rows, query, filter, smeRows, leave, selected, onSelect }: {
   rows: WorkloadRow[]; query: string; filter: SmeFilter; smeRows: DraftRow[]; leave: Record<string, string>;
-  open: boolean; onToggle: () => void; selected: string; onSelect: (id: string) => void;
+  selected: string; onSelect: (id: string) => void;
 }) {
   const shown = rows.filter((w) => smeMatches(w.sme, smeRows, query, filter, leave));
   const peak = Math.max(1, ...rows.map((w) => Math.max(...w.byWeek.map((b) => b.sessions))));
   const out = shown.filter((w) => !w.inBand);
   return (
-    <section className="card shrink-0">
-      <button className="flex w-full items-center gap-[9px] p-[12px_20px_11px] text-left"
-        onClick={onToggle} style={{ borderBottom: open ? "1px solid var(--line-2)" : undefined }}>
-        <span className="text-[13px] font-bold">Workload over the last 4 weeks</span>
+    <section className="card flex min-h-0 flex-1 flex-col">
+      <div className="flex w-full items-center gap-[9px] p-[12px_20px_11px] text-left" style={{ borderBottom: "1px solid var(--line-2)" }}>
+        <span className="text-[13px] font-bold">Workload over past weeks</span>
         <span className="text-[11.5px]" style={{ color: "var(--muted-2)" }}>
           The window the scheduler scores fairness on — three past weeks plus this one, against the pool mean ± {FAIRNESS_BAND}
         </span>
@@ -330,11 +382,9 @@ function WorkloadCard({ rows, query, filter, smeRows, leave, open, onToggle, sel
           {!!out.length && (
             <span className="chip chip-medium">{out.length} outside the band</span>
           )}
-          <span className="text-[11.5px] font-semibold" style={{ color: "var(--brand-deep)" }}>{open ? "Hide" : "Show"}</span>
         </span>
-      </button>
-      {open && (
-        <div className="max-h-[210px] overflow-auto p-[6px_14px_12px]">
+      </div>
+        <div className="min-h-0 flex-1 overflow-auto p-[6px_14px_12px]">
           <div role="list">
               {shown.map((w) => {
                 const tone = w.inBand ? null : w.delta > 0 ? "over" : "under";
@@ -386,7 +436,6 @@ function WorkloadCard({ rows, query, filter, smeRows, leave, open, onToggle, sel
             below the mean is not underused by choice — it is the gap the next draft tries to close.
           </div>
         </div>
-      )}
     </section>
   );
 }
