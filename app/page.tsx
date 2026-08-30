@@ -2006,7 +2006,7 @@ export default function Page() {
       return (
         <PastWeeks
           weeks={PAST_WEEKS} selected={pastWeek} sessions={PAST_SESSIONS} smes={smes}
-          courses={COURSES} meta={META} vh={vh} onSelect={setPastWeek}
+          history={historyRecords} courses={COURSES} meta={META} vh={vh} onSelect={setPastWeek}
         />
       );
     }

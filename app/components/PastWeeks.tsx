@@ -1,14 +1,14 @@
 "use client";
 import { useMemo } from "react";
-import type { Course, DraftRow, Meta, PastWeek, Session, SME } from "@/lib/types";
-import { avatarBg, initials, isLive, istParts, liveRows } from "@/lib/view";
-import WeekCalendar from "./WeekCalendar";
+import type { Course, DraftRow, HistoryRecord, Meta, PastWeek, Session, SME } from "@/lib/types";
+import { avatarBg, initials, isLive, liveRows } from "@/lib/view";
 
 interface Props {
   weeks: PastWeek[];
   selected: string;
   sessions: Record<string, Session[]>;
   smes: SME[];
+  history: HistoryRecord[];
   courses: Record<string, Course>;
   meta: Meta;
   vh: number;
@@ -41,7 +41,7 @@ const Stat = ({ n, label, tone }: { n: number; label: string; tone?: "red" | "mu
   </div>
 );
 
-export default function PastWeeks({ weeks, selected, sessions, smes, courses, meta, vh, onSelect }: Props) {
+export default function PastWeeks({ weeks, selected, sessions, smes, history, courses, meta, vh, onSelect }: Props) {
   const week = weeks.find((w) => w.iso === selected) ?? weeks[weeks.length - 1];
   const rows = useMemo(() => asRows(sessions[week?.iso] ?? [], smes), [sessions, week, smes]);
 
@@ -62,14 +62,6 @@ export default function PastWeeks({ weeks, selected, sessions, smes, courses, me
     });
     return [...acc.values()].sort((a, b) => b.count - a.count || a.sme.name.localeCompare(b.sme.name));
   }, [taught, smes]);
-
-  const weekDates = useMemo(() => {
-    const first = [...rows].sort((a, b) => a.start_utc.localeCompare(b.start_utc))[0]?.start_utc;
-    if (!first) return meta.days.map((d) => ({ day: d, date: "" }));
-    const p0 = istParts(first);
-    const base = new Date(new Date(first).getTime() - p0.day * 864e5);
-    return meta.days.map((d, i) => ({ day: d, date: istParts(new Date(base.getTime() + i * 864e5).toISOString()).date }));
-  }, [rows, meta.days]);
 
   if (!week) return null;
 
@@ -115,42 +107,94 @@ export default function PastWeeks({ weeks, selected, sessions, smes, courses, me
         )}
       </section>
 
-      <div className="flex min-h-0 flex-1 gap-[14px]">
-        <section className="card flex min-h-0 flex-[2] flex-col overflow-hidden">
-          <WeekCalendar
-            rows={rows} courses={courses} meta={meta} weekDates={weekDates}
-            approved={new Set()} onOpen={() => {}} vh={vh}
-          />
-        </section>
-        <section className="card flex min-h-0 w-[292px] shrink-0 flex-col">
-          <div className="p-[12px_16px_10px]" style={{ borderBottom: "0.5px solid rgba(16,26,51,0.06)" }}>
-            <div className="text-[13px] font-bold">Who taught what</div>
+      <section className="card flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-3 p-[13px_20px_11px]" style={{ borderBottom: "0.5px solid rgba(16,26,51,0.06)" }}>
+          <div>
+            <div className="text-[13px] font-bold">SME performance</div>
             <div className="mt-[2px] text-[11px]" style={{ color: "var(--muted)" }}>
-              {taught.length} classes across {perSme.length} teachers
+              Ratings and completed teaching load for {week.range}
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto p-[8px_10px]">
-            {perSme.map(({ sme, count, batches }) => (
-              <div key={sme.id} className="flex items-center gap-[9px] p-[7px_6px]">
-                <span className="grid size-[27px] shrink-0 place-items-center rounded-full text-[10.5px] font-bold"
-                  style={{ background: avatarBg(sme.id), color: "var(--brand-deep)" }}>
-                  {initials(sme.name)}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] font-semibold">{sme.name}</span>
-                  <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-[11px]" style={{ color: "var(--muted)" }}>
-                    {[...batches].sort().join(" · ")}
-                  </span>
-                </span>
-                <span className="shrink-0 text-[12.5px] font-bold">{count}</span>
-              </div>
-            ))}
-            {!perSme.length && (
-              <div className="p-3 text-[12px]" style={{ color: "var(--muted)" }}>Nothing ran that week.</div>
-            )}
-          </div>
-        </section>
-      </div>
+          <span className="ml-auto text-[11.5px]" style={{ color: "var(--muted)" }}>{perSme.length} teachers</span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full min-w-[860px] border-collapse">
+            <thead>
+              <tr className="label-caps text-left">
+                <th className="p-[10px_20px] font-semibold">SME</th>
+                <th className="p-[10px] font-semibold">Subject pool</th>
+                <th className="w-[130px] p-[10px] font-semibold">Classes taken</th>
+                <th className="w-[220px] p-[10px] font-semibold">Batches covered</th>
+                <th className="w-[190px] p-[10px] font-semibold">Session rating</th>
+                <th className="w-[170px] p-[10px_20px] font-semibold">Cancellations / surplus</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perSme.map(({ sme, count, batches }) => {
+                const historical = history.find((h) => h.sme_id === sme.id && h.week === week.iso)
+                  ?? sme.history.find((h) => h.week === week.iso);
+                const values = Object.values(historical?.per_topic_rating ?? {});
+                const sessionRating = historical?.post_session_rating
+                  ?? (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : sme.rating);
+                const cancellations = rows.filter((r) => r.sme_id === sme.id && r.cancelled).length;
+                const surplus = Math.max(0, count - sme.preferred);
+                const mergedHosted = rows.filter((r) => r.merged_into)
+                  .filter((r) => rows.find((host) => host.session_id === r.merged_into)?.sme_id === sme.id).length;
+                return (
+                  <tr key={sme.id} className="hover:bg-[rgba(79,149,216,0.04)]" style={{ borderTop: "0.5px solid rgba(16,26,51,0.06)" }}>
+                    <td className="p-[12px_20px]">
+                      <div className="flex items-center gap-[9px]">
+                        <span className="grid size-[30px] shrink-0 place-items-center rounded-full text-[10.5px] font-bold"
+                          style={{ background: avatarBg(sme.id), color: "var(--brand-deep)" }}>
+                          {initials(sme.name)}
+                        </span>
+                        <span>
+                          <span className="block text-[12.5px] font-semibold">{sme.name}</span>
+                          <span className="block text-[10.5px]" style={{ color: "var(--muted)" }}>{sme.id} · lifetime ★ {sme.rating.toFixed(1)}</span>
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-[12px_10px] text-[12px]">{sme.subject} pool</td>
+                    <td className="p-[12px_10px]"><span className="text-[14px] font-bold">{count}</span><span className="ml-1 text-[11px]" style={{ color: "var(--muted)" }}>classes</span></td>
+                    <td className="p-[12px_10px] text-[11.5px]" style={{ color: "var(--ink-3)" }}>{[...batches].sort().join(" · ")}</td>
+                    <td className="p-[12px_10px]">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px] font-bold" style={{ color: "var(--green-ink)" }}>★ {sessionRating.toFixed(1)}</span>
+                        <span className="h-[5px] w-[82px] overflow-hidden rounded-full" style={{ background: "var(--line-2)" }}>
+                          <span className="block h-full rounded-full" style={{ width: `${(sessionRating / 5) * 100}%`, background: "var(--green)" }} />
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-[12px_20px]">
+                      <span className="flex flex-wrap gap-[5px]">
+                        {cancellations > 0 && (
+                          <span className="rounded-[8px] px-2 py-[4px] text-[10.5px] font-bold" style={{ background: "var(--red-tint)", color: "var(--red-ink)" }}>
+                            {cancellations} cancelled
+                          </span>
+                        )}
+                        {surplus > 0 && (
+                          <span className="rounded-[8px] px-2 py-[4px] text-[10.5px] font-bold" style={{ background: "var(--green-tint)", color: "var(--green-ink)" }}>
+                            +{surplus} surplus
+                          </span>
+                        )}
+                        {mergedHosted > 0 && (
+                          <span className="rounded-[8px] px-2 py-[4px] text-[10.5px] font-bold" style={{ background: "var(--brand-tint)", color: "var(--brand-deep)" }}>
+                            {mergedHosted} merged
+                          </span>
+                        )}
+                        {!cancellations && !surplus && !mergedHosted && <span className="text-[11.5px]" style={{ color: "var(--muted)" }}>—</span>}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!perSme.length && (
+                <tr><td colSpan={6} className="p-8 text-center text-[12.5px]" style={{ color: "var(--muted)" }}>Nothing ran that week.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
