@@ -1,6 +1,6 @@
 export type WeekKey = "current" | "next";
 export type Role = "coordinator" | "sme" | "student";
-export type ModuleKey = "dashboard" | "smes" | "batches" | "history" | "myweek" | "mysched";
+export type ModuleKey = "dashboard" | "smes" | "batches" | "myweek" | "mysched";
 export type SessionType = "class" | "doubt" | "mock";
 export type LevelName = "beginner" | "intermediate" | "advanced";
 

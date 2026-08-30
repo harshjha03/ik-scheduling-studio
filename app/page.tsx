@@ -9,15 +9,10 @@ import batchesJson from "@/data/batches.json";
 import coursesJson from "@/data/courses.json";
 import weeksJson from "@/data/weeks.json";
 import metaJson from "@/data/meta.json";
-import pastWeeksJson from "@/data/past_weeks.json";
-import sessionsW32Json from "@/data/sessions_w32.json";
-import sessionsW33Json from "@/data/sessions_w33.json";
-import sessionsW34Json from "@/data/sessions_w34.json";
-import sessionsW35Json from "@/data/sessions_w35.json";
 import type {
   AgentMove, AgentMoveAction, AgentRequest, AgentResult, ChatTurn, DataProvenance,
   Batch, Category, Course, Decision, DraftRow, Fix, HistoryRecord, LeafId, Meta, ModuleKey, NewClass, OverrideEvent,
-  Cancellation, PastWeek, Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME,
+  Cancellation, Profile, ResolvedEntry, Role, RunResult, SendState, Session, SheetState, SME,
   WeekKey, WeekMeta, WorkItem,
 } from "@/lib/types";
 import {
@@ -42,7 +37,6 @@ import KpiCards from "./components/KpiCards";
 import Dashboard from "./components/Dashboard";
 import SmeManagement from "./components/SmeManagement";
 import BatchManagement from "./components/BatchManagement";
-import PastWeeks from "./components/PastWeeks";
 import MyWeek from "./components/MyWeek";
 import Sheet, { PersonRow, SectionLabel } from "./components/Sheet";
 import WorkSheet from "./components/WorkSheet";
@@ -66,14 +60,6 @@ const BATCHES0 = batchesJson as unknown as Batch[];
 const COURSES = coursesJson as unknown as Record<string, Course>;
 const WEEKS = weeksJson as unknown as Record<WeekKey, WeekMeta>;
 const META = metaJson as unknown as Meta;
-const PAST_WEEKS = pastWeeksJson as unknown as PastWeek[];
-/** Settled weeks: the rows carry the teacher who actually took the class, so they need no pipeline. */
-const PAST_SESSIONS: Record<string, Session[]> = {
-  "2026-W32": sessionsW32Json as unknown as Session[],
-  "2026-W33": sessionsW33Json as unknown as Session[],
-  "2026-W34": sessionsW34Json as unknown as Session[],
-  "2026-W35": sessionsW35Json as unknown as Session[],
-};
 
 const flagKey = (r: DraftRow) => r.flags.map((f) => f.code).sort().join("|");
 /** The three ingestable datasets, in the order the header names them. */
@@ -157,7 +143,6 @@ export default function Page() {
   // A published week that has since been amended: the calendars people hold are stale for the rows
   // in `changed`, and only those need re-sending.
   const [amended, setAmended] = useState<Partial<Record<WeekKey, boolean>>>({});
-  const [pastWeek, setPastWeek] = useState<string>(PAST_WEEKS.at(-1)?.iso ?? "");
   // what is actually wired up right now, so every control can label itself live or simulated
   const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null);
   const [sheetBusy, setSheetBusy] = useState(false);
@@ -2002,14 +1987,6 @@ export default function Page() {
         />
       );
     }
-    if (mod === "history") {
-      return (
-        <PastWeeks
-          weeks={PAST_WEEKS} selected={pastWeek} sessions={PAST_SESSIONS} smes={smes}
-          history={historyRecords} courses={COURSES} meta={META} vh={vh} onSelect={setPastWeek}
-        />
-      );
-    }
     if (mod === "batches") {
       return (
         <BatchManagement
@@ -2078,7 +2055,7 @@ export default function Page() {
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-[14px]">
             <div className="flex items-center gap-[10px]">
-              <div className="tabs tabs-solid" style={mod === "history" ? { display: "none" } : undefined}>
+              <div className="tabs tabs-solid">
                 {(["current", "next"] as WeekKey[]).map((k) => (
                   <button key={k} onClick={() => setWeek(k)} className={`tab ${week === k ? "tab-on" : "tab-off"}`}>
                     {WEEKS[k].label}

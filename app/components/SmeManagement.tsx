@@ -173,7 +173,6 @@ export default function SmeManagement({
             <tbody>
               {shown.map((s) => {
                 const st = smeWeekStats(s, rows);
-                const on = s.id === sel.id;
                 const fits = fitsFor(s, rows).length;
                 const nextLevel = meta.levels[meta.levels.indexOf(s.level) + 1];
                 const td = { padding: "11px 10px", verticalAlign: "top" as const, borderTop: "0.5px solid rgba(16,26,51,0.06)" };
@@ -183,7 +182,6 @@ export default function SmeManagement({
                     key={s.id}
                     onClick={() => openSme(s.id)}
                     className="cursor-pointer hover:bg-[rgba(79,149,216,0.05)]"
-                    style={{ background: on ? "rgba(79,149,216,0.06)" : "transparent", boxShadow: on ? "inset 3px 0 0 var(--brand-bright)" : "none" }}
                   >
                     <td style={{ ...td, paddingLeft: 20 }}>
                       <div className="flex items-center gap-[9px]">
@@ -290,7 +288,7 @@ export default function SmeManagement({
 
       {section === "workload" && (
         <WorkloadCard rows={workload} query={query} filter={filter} smeRows={rows} leave={leave}
-          selected={sel.id} onSelect={openSme} />
+          onSelect={openSme} />
       )}
 
       {showDetail && (
@@ -364,9 +362,9 @@ export default function SmeManagement({
  * there was nowhere in the app to see where that came from — so the band was a number a coordinator
  * had to take on trust. These are the same figures, per teacher, with the band drawn on.
  */
-function WorkloadCard({ rows, query, filter, smeRows, leave, selected, onSelect }: {
+function WorkloadCard({ rows, query, filter, smeRows, leave, onSelect }: {
   rows: WorkloadRow[]; query: string; filter: SmeFilter; smeRows: DraftRow[]; leave: Record<string, string>;
-  selected: string; onSelect: (id: string) => void;
+  onSelect: (id: string) => void;
 }) {
   const shown = rows.filter((w) => smeMatches(w.sme, smeRows, query, filter, leave));
   const peak = Math.max(1, ...rows.map((w) => Math.max(...w.byWeek.map((b) => b.sessions))));
@@ -376,7 +374,7 @@ function WorkloadCard({ rows, query, filter, smeRows, leave, selected, onSelect 
       <div className="flex w-full items-center gap-[9px] p-[12px_20px_11px] text-left" style={{ borderBottom: "1px solid var(--line-2)" }}>
         <span className="text-[13px] font-bold">Workload over past weeks</span>
         <span className="text-[11.5px]" style={{ color: "var(--muted-2)" }}>
-          The window the scheduler scores fairness on — three past weeks plus this one, against the pool mean ± {FAIRNESS_BAND}
+          4-week load and fairness against the subject-pool mean ± {FAIRNESS_BAND}
         </span>
         <span className="ml-auto flex items-center gap-[9px]">
           {!!out.length && (
@@ -385,33 +383,44 @@ function WorkloadCard({ rows, query, filter, smeRows, leave, selected, onSelect 
         </span>
       </div>
         <div className="min-h-0 flex-1 overflow-auto p-[6px_14px_12px]">
+          <div className="sticky top-0 z-[2] grid items-center gap-x-[8px] bg-white px-[8px] py-[8px] label-caps" style={{ gridTemplateColumns: "168px minmax(200px,1fr) 44px 190px" }}>
+            <span className="text-center">SME</span>
+            <span className="border-l border-[var(--line-2)] text-center">Weekly classes</span>
+            <span className="border-l border-[var(--line-2)] text-center">Total</span>
+            <span className="border-l border-[var(--line-2)] text-center">Fairness</span>
+          </div>
           <div role="list">
               {shown.map((w) => {
                 const tone = w.inBand ? null : w.delta > 0 ? "over" : "under";
                 return (
                   <div role="listitem" key={w.sme.id} onClick={() => onSelect(w.sme.id)}
-                    className="flex items-center gap-[8px] rounded-[8px]"
-                    style={{ cursor: "pointer", background: w.sme.id === selected ? "var(--brand-tint)" : undefined }}>
-                    <span className="shrink-0 p-[5px_8px] text-[12.5px] font-semibold" style={{ width: 168 }}>
+                    className="grid cursor-pointer items-center gap-x-[8px] rounded-[8px] hover:bg-[rgba(79,149,216,0.05)]"
+                    style={{ gridTemplateColumns: "168px minmax(200px,1fr) 44px 190px" }}>
+                    <span className="p-[5px_8px] text-[12.5px] font-semibold">
                       <span className="block overflow-hidden text-ellipsis whitespace-nowrap">{w.sme.name}</span>
                       <span className="block text-[10.5px] font-normal" style={{ color: "var(--muted)" }}>{w.subject} pool</span>
                     </span>
-                    <span className="min-w-0 flex-1 p-[5px_8px]">
-                      <span className="flex items-end gap-[4px]" style={{ height: 30 }}>
+                    <span className="min-w-0 border-l border-[var(--line-2)] p-[5px_8px]">
+                      <span className="flex items-end gap-[7px]">
                         {w.byWeek.map((b, i) => (
-                          <span key={i} title={`${b.draft ? "this week" : b.week}: ${b.sessions}`}
-                            className="flex-1 rounded-t-[3px]"
-                            style={{
-                              height: `${Math.max(3, (b.sessions / peak) * 30)}px`,
-                              background: b.draft ? "var(--brand)" : "var(--brand-tint)",
-                              border: b.draft ? undefined : "1px solid var(--line)",
-                              opacity: b.draft ? 1 : 0.9,
-                            }} />
+                          <span key={i} className="flex min-w-0 flex-1 flex-col items-center gap-[3px]" title={`${b.draft ? "This week" : b.week}: ${b.sessions} classes`}>
+                            <span className="relative flex h-[30px] w-full items-center justify-center overflow-hidden rounded-[5px] text-[11px] font-bold"
+                              style={{ background: "#eef4fb", border: "1px solid var(--brand-line)", color: "var(--ink-2)" }}>
+                              <span className="absolute inset-y-0 left-0 rounded-[4px]" style={{
+                                width: `${Math.max(0, Math.min(100, (b.sessions / peak) * 100))}%`,
+                                background: b.draft ? "#8dbce1" : "#b8d5ef",
+                              }} />
+                              <span className="relative z-[1]" style={{ color: "var(--ink-2)" }}>{b.sessions}</span>
+                            </span>
+                            <span className="whitespace-nowrap text-[9.5px] font-semibold" style={{ color: b.draft ? "var(--brand-deep)" : "var(--muted)" }}>
+                              {b.draft ? "This" : b.week.replace(/^\d{4}-/, "")}
+                            </span>
+                          </span>
                         ))}
                       </span>
                     </span>
-                    <span className="shrink-0 p-[5px_8px] text-right text-[12.5px] font-bold" style={{ width: 44 }}>{w.total}</span>
-                    <span className="shrink-0 p-[5px_8px] text-[11px]" style={{ width: 190, color: "var(--muted)" }}>
+                    <span className="border-l border-[var(--line-2)] p-[5px_8px] text-right text-[12.5px] font-bold">{w.total}</span>
+                    <span className="border-l border-[var(--line-2)] p-[5px_8px] text-[11px]" style={{ color: "var(--muted)" }}>
                       pool mean {w.poolMean.toFixed(1)}
                       {" · "}
                       <span style={{
@@ -430,10 +439,6 @@ function WorkloadCard({ rows, query, filter, smeRows, leave, selected, onSelect 
                   Nobody matches that search or filter.
                 </div>
               )}
-          </div>
-          <div className="mt-[7px] text-[11px] leading-[1.5]" style={{ color: "var(--muted)" }}>
-            The solid bar is the week on screen; the outlined bars are the three history weeks behind it. A teacher
-            below the mean is not underused by choice — it is the gap the next draft tries to close.
           </div>
         </div>
     </section>
