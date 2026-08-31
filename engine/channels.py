@@ -144,8 +144,15 @@ def title_of(row: dict) -> str:
     return f"{prefix}{row['batch_id']} · {topic}"
 
 
-def event_body(row: dict, sme_email: str | None = None) -> dict:
-    """A Google Calendar event for one class. Deterministic, so re-publishing is a clean update."""
+def event_body(row: dict, sme_email: str | None = None, invite: bool = True) -> dict:
+    """A Google Calendar event for one class. Deterministic, so re-publishing is a clean update.
+
+    `sme_email` is written into the description whenever it is given, and added as an attendee only
+    when `invite` — a bare service account gets 403 forbiddenForServiceAccounts on an attendee, so
+    without this the address reached the event by no route at all and editing a teacher's e-mail
+    changed nothing about the body. The description carries it either way, which is also what makes
+    such an edit a real update rather than a no-op skip.
+    """
     start, end = _span(row)
     teacher = row.get("sme_name") or "To be confirmed"
     kind = dropped(row)
@@ -153,7 +160,7 @@ def event_body(row: dict, sme_email: str | None = None) -> dict:
         f"Batch: {row['batch_id']}",
         f"Course: {row.get('subject', '')}",
         f"Topic: {row.get('sub_specialty') or row.get('type')}",
-        f"Teacher: {teacher}",
+        f"Teacher: {teacher}" + (f" ({sme_email})" if sme_email else ""),
     ]
     if kind == "cancelled":
         why = (row["cancelled"] or {}).get("reason") if isinstance(row.get("cancelled"), dict) else None
@@ -174,7 +181,7 @@ def event_body(row: dict, sme_email: str | None = None) -> dict:
         # our own id, so a second publish updates the same event instead of duplicating it
         "extendedProperties": {"private": {"ikSessionId": row["session_id"]}},
     }
-    if sme_email:
+    if sme_email and invite:
         body["attendees"] = [{"email": sme_email, "responseStatus": "needsAction"}]
     return body
 
@@ -400,32 +407,37 @@ def _body_hash(body: dict) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
-def _write_one(row: dict, owned: dict, api, invite: bool, q: str) -> tuple[str, str | None, str | None, bool]:
-    """One event: (session_id, event_id, error, skipped). Pure HTTP — deliberately no store writes.
+def _write_one(row: dict, owned: dict, api, invite: bool, q: str,
+               sme_audience: bool = True) -> tuple[str, str | None, str | None, bool, str]:
+    """One event: (session_id, event_id, error, skipped, body_hash). Pure HTTP — no store writes.
 
     The store takes a process-wide lock, so 8 workers writing to it would serialise on that lock and
     hand back the concurrency the pool just bought. The caller writes the whole batch once instead.
+
+    The hash is returned rather than recomputed by the caller: the two expressions have to agree
+    exactly or every publish rewrites every row, and keeping them in two places invited that.
+    The address goes to the teacher's own calendar only — a cohort calendar is read by learners.
     """
     sid = row["session_id"]
     email = row.get("sme_email")
-    body = event_body(row, email if invite and deliverable(email) else None)
+    body = event_body(row, email if sme_audience and deliverable(email) else None, invite=invite)
     digest = _body_hash(body)
     known, known_hash = owned.get(sid, (None, None))
     if known and known_hash and known_hash == digest:
-        return sid, known, None, True          # unchanged since the last publish: nothing to send
+        return sid, known, None, True, digest   # unchanged since the last publish: nothing to send
     try:
         if known:
             try:
                 api("PUT", f"/{known}{q}", body)
-                return sid, known, None, False
+                return sid, known, None, False, digest
             except Exception as exc:
                 if getattr(exc, "code", None) not in (404, 410):
                     raise
                 # deleted in Google — fall through and re-create it
         created = api("POST", q, body)
-        return sid, created.get("id") or known, None, False
+        return sid, created.get("id") or known, None, False, digest
     except Exception as exc:                   # one bad row must not sink the batch
-        return sid, None, f"{sid}: {type(exc).__name__}", False
+        return sid, None, f"{sid}: {type(exc).__name__}", False, digest
 
 
 def send_calendar(rows: list[dict], audience: str, store=None, api=None, calendar_id: str | None = None) -> Result:
@@ -456,16 +468,16 @@ def send_calendar(rows: list[dict], audience: str, store=None, api=None, calenda
     # one round-trip for the whole batch, carrying the hash that lets an unchanged row be skipped
     owned = store.owned_on(cal) if store else {}
 
+    sme_audience = audience == "sme"
     if len(rows) > 1 and CAL_WORKERS > 1:
         with ThreadPoolExecutor(max_workers=min(CAL_WORKERS, len(rows))) as pool:
-            results = list(pool.map(lambda r: _write_one(r, owned, api, invite, q), rows))
+            results = list(pool.map(lambda r: _write_one(r, owned, api, invite, q, sme_audience), rows))
     else:
-        results = [_write_one(r, owned, api, invite, q) for r in rows]
+        results = [_write_one(r, owned, api, invite, q, sme_audience) for r in rows]
 
-    sent = [(sid, eid, _body_hash(event_body(r, r.get("sme_email") if invite and deliverable(r.get("sme_email")) else None)))
-            for r, (sid, eid, err, skipped) in zip(rows, results) if eid and not err]
-    failed = [err for _, _, err, _ in results if err]
-    skipped = sum(1 for _, _, _, sk in results if sk)
+    sent = [(sid, eid, digest) for sid, eid, err, skipped, digest in results if eid and not err]
+    failed = [err for _, _, err, _, _ in results if err]
+    skipped = sum(1 for _, _, _, sk, _ in results if sk)
     if store and sent:
         store.remember_events(cal, sent)       # one write, not one per row
     took = time.perf_counter() - t0

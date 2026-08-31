@@ -1,6 +1,6 @@
 "use client";
 import type { Batch, Category, Course, DraftRow, Meta, OverrideEvent, WeekKey, WeekMeta } from "@/lib/types";
-import { CATEGORIES, category } from "@/lib/view";
+import { CATEGORIES, category, isLive } from "@/lib/view";
 import WeekCalendar from "./WeekCalendar";
 import OverridesList from "./OverridesList";
 import { BatchMenu } from "./FilterMenus";
@@ -45,8 +45,14 @@ export default function Dashboard({
   onOpenWork, onAskCopilot, onApproveWeek, onOpen, onOpenOverride,
 }: Props) {
   const locked = weeks[week].locked;
-  const unfilled = allRows.filter((r) => !r.sme_id).length;
-  const conflicts = allRows.filter((r) => r.flags.some((f) => f.code === "HARD_CONFLICT")).length;
+  // A cancelled or merged class has no sme_id by definition — nobody teaches a class that is not
+  // running. Counting it as unstaffed blocked Approve with no way to clear it, because the only way
+  // to clear an unfilled row is to staff it. `category()` has always routed these to "dropped";
+  // these two counters were the ones reading the raw field instead. (Matches engine/run.py, which
+  // counts `stats.unfilled` over live rows only.)
+  const open = allRows.filter(isLive);
+  const unfilled = open.filter((r) => !r.sme_id).length;
+  const conflicts = open.filter((r) => r.flags.some((f) => f.code === "HARD_CONFLICT")).length;
   const counts = CATEGORIES.reduce((acc, c) => {
     acc[c.key] = rows.filter((r) => category(r, approved.has(r.session_id)) === c.key).length;
     return acc;
